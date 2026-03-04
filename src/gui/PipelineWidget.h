@@ -30,6 +30,7 @@ private:
     void onBlockClicked(EffectBlockWidget* block);
     void moveSelectedUp();
     void moveSelectedDown();
+    void toggleSelectedEnabled();
     void updateButtons();
     void addFlowArrow(qreal y);
     void handleDrop(int fromIndex, int toIndex);
@@ -37,8 +38,10 @@ private:
 
     QGraphicsView* m_view;
     QGraphicsScene* m_scene;
+    QPushButton* m_enableBtn;
     QPushButton* m_upBtn;
     QPushButton* m_downBtn;
+    QPushButton* m_removeBtn;
     EffectPipeline* m_pipeline = nullptr;
     EffectSettingsPanel* m_settingsPanel = nullptr;
     ModulationManager* m_modulationMgr = nullptr;

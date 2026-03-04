@@ -57,14 +57,15 @@ ModulatorEditorDialog::ModulatorEditorDialog(const QString& paramName, float par
 
     layout->addLayout(form);
 
-    // Keyframe editor (shown only when Keyframe curve selected)
+    // Curve preview / keyframe editor (always visible)
     m_keyframeWidget = new KeyframeCurveWidget(this);
     if (existing && existing->curve == ModCurve::Keyframe)
         m_keyframeWidget->setKeyframes(existing->keyframes);
     else
         m_keyframeWidget->setKeyframes({{0.f, 0.f}, {0.5f, 1.f}, {1.f, 0.f}});
+    ModCurve initialCurve = existing ? existing->curve : ModCurve::Linear;
+    m_keyframeWidget->setCurveMode(initialCurve);
     layout->addWidget(m_keyframeWidget);
-    m_keyframeWidget->setVisible(m_curveCombo->currentIndex() == 3);
 
     connect(m_curveCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, &ModulatorEditorDialog::onCurveChanged);
@@ -103,9 +104,9 @@ ModulatorConfig ModulatorEditorDialog::result() const {
     return cfg;
 }
 
-void ModulatorEditorDialog::onCurveChanged(int index) {
-    m_keyframeWidget->setVisible(index == 3);
-    adjustSize();
+void ModulatorEditorDialog::onCurveChanged(int) {
+    m_keyframeWidget->setCurveMode(static_cast<ModCurve>(m_curveCombo->currentData().toInt()));
+    m_keyframeWidget->update();
 }
 
 // ---------- KeyframeCurveWidget ----------
@@ -113,6 +114,37 @@ void ModulatorEditorDialog::onCurveChanged(int index) {
 KeyframeCurveWidget::KeyframeCurveWidget(QWidget* parent) : QWidget(parent) {
     setMinimumSize(300, 150);
     setMouseTracking(true);
+}
+
+void KeyframeCurveWidget::setCurveMode(ModCurve mode) {
+    m_curveMode = mode;
+    update();
+}
+
+float KeyframeCurveWidget::evaluateCurve(float t) const {
+    t = std::clamp(t, 0.f, 1.f);
+    switch (m_curveMode) {
+    case ModCurve::Linear: return t;
+    case ModCurve::EaseInOut: return t * t * (3.f - 2.f * t);
+    case ModCurve::Rubberband: return 1.f - std::pow(2.f, -8.f * t);
+    default: return t;
+    }
+}
+
+void KeyframeCurveWidget::drawCurvePreview(QPainter& p, float margin, float w, float h) {
+    // Draw the curve shape with ping-pong (0->1->0) to show full cycle
+    p.setPen(QPen(QColor(100, 200, 255), 2));
+    constexpr int steps = 100;
+    QPointF prev;
+    for (int i = 0; i <= steps; ++i) {
+        float phase = static_cast<float>(i) / steps * 2.f; // 0 to 2 (full ping-pong)
+        float t = phase <= 1.f ? phase : 2.f - phase;
+        float val = evaluateCurve(t);
+        QPointF pt(margin + (static_cast<float>(i) / steps) * w,
+                   margin + (1.f - val) * h);
+        if (i > 0) p.drawLine(prev, pt);
+        prev = pt;
+    }
 }
 
 void KeyframeCurveWidget::setKeyframes(const std::vector<Keyframe>& keyframes) {
@@ -168,6 +200,13 @@ void KeyframeCurveWidget::paintEvent(QPaintEvent*) {
         p.drawLine(QPointF(margin, y), QPointF(margin + w, y));
     }
 
+    // Non-keyframe modes: draw read-only curve preview
+    if (m_curveMode != ModCurve::Keyframe) {
+        drawCurvePreview(p, margin, w, h);
+        return;
+    }
+
+    // Keyframe mode: interactive curve with draggable points
     if (m_keyframes.empty()) return;
 
     // Curve
@@ -188,12 +227,13 @@ void KeyframeCurveWidget::paintEvent(QPaintEvent*) {
 }
 
 void KeyframeCurveWidget::mousePressEvent(QMouseEvent* event) {
+    if (m_curveMode != ModCurve::Keyframe) return;
     m_dragIndex = hitTest(event->position());
     update();
 }
 
 void KeyframeCurveWidget::mouseMoveEvent(QMouseEvent* event) {
-    if (m_dragIndex < 0) return;
+    if (m_curveMode != ModCurve::Keyframe || m_dragIndex < 0) return;
     Keyframe kf = widgetToKeyframe(event->position());
     // Don't allow dragging past neighbors
     if (m_dragIndex > 0)
@@ -210,6 +250,7 @@ void KeyframeCurveWidget::mouseReleaseEvent(QMouseEvent*) {
 }
 
 void KeyframeCurveWidget::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (m_curveMode != ModCurve::Keyframe) return;
     int hit = hitTest(event->position());
     if (hit >= 0) {
         // Remove point (keep at least 2)

@@ -118,6 +118,7 @@ void EffectSettingsPanel::buildSliders() {
                 }
                 slider->setEnabled(true);
                 modBtn->setStyleSheet("");
+                emit modulationChanged();
                 return;
             }
 
@@ -133,6 +134,7 @@ void EffectSettingsPanel::buildSliders() {
                 slider->setEnabled(true);
                 modBtn->setStyleSheet("");
             }
+            emit modulationChanged();
         });
 
         m_sliderEntries.push_back({slider, valueLabel, modBtn, param.id});

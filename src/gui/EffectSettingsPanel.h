@@ -20,6 +20,9 @@ public:
     void clearEffect();
     void setModulationManager(ModulationManager* mgr) { m_modulationMgr = mgr; }
 
+signals:
+    void modulationChanged();
+
 private:
     void buildSliders();
     void refreshModulatedValues();

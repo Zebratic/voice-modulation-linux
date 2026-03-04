@@ -54,6 +54,7 @@ set(VML_SOURCES
     src/gui/VuMeter.cpp
     src/gui/WaveformWidget.cpp
     src/gui/SpectrumWidget.cpp
+    src/gui/KeyframeTimelineWidget.cpp
     src/gui/ModulatorEditorDialog.cpp
     src/profile/ProfileManager.cpp
 )

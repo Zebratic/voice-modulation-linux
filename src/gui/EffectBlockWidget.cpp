@@ -71,5 +71,5 @@ void EffectBlockWidget::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
 }
 
 void EffectBlockWidget::mouseDoubleClickEvent(QGraphicsSceneMouseEvent*) {
-    setBypassed(!m_bypassed);
+    if (onDoubleClicked) onDoubleClicked(this);
 }

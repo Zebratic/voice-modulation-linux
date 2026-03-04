@@ -41,9 +41,8 @@ int Application::run() {
 
     m_profileManager = std::make_unique<ProfileManager>();
 
-    // Install default profiles if none exist
-    if (m_profileManager->listProfiles().empty())
-        m_profileManager->installDefaultProfiles();
+    // Install any missing built-in profiles
+    m_profileManager->installDefaultProfiles();
 
     m_engine = std::make_unique<AudioEngine>();
 

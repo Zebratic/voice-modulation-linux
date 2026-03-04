@@ -35,22 +35,38 @@ PipelineWidget::PipelineWidget(QWidget* parent) : QWidget(parent) {
     m_view->viewport()->installEventFilter(this);
     outerLayout->addWidget(m_view, 1);
 
-    // Up/Down buttons on the right side
+    // Control buttons on the right side
     auto* btnLayout = new QVBoxLayout();
     btnLayout->addStretch();
-    m_upBtn = new QPushButton("\xe2\x96\xb2", this); // Unicode up triangle
+
+    m_enableBtn = new QPushButton("\xe2\x9c\x93", this); // Unicode checkmark ✓
+    m_enableBtn->setFixedSize(36, 36);
+    m_enableBtn->setToolTip("Enable/disable selected effect");
+    m_enableBtn->setEnabled(false);
+    connect(m_enableBtn, &QPushButton::clicked, this, &PipelineWidget::toggleSelectedEnabled);
+    btnLayout->addWidget(m_enableBtn);
+
+    m_upBtn = new QPushButton("\xe2\x96\xb2", this); // Unicode up triangle ▲
     m_upBtn->setFixedSize(36, 36);
     m_upBtn->setToolTip("Move selected effect up");
     m_upBtn->setEnabled(false);
     connect(m_upBtn, &QPushButton::clicked, this, &PipelineWidget::moveSelectedUp);
     btnLayout->addWidget(m_upBtn);
 
-    m_downBtn = new QPushButton("\xe2\x96\xbc", this); // Unicode down triangle
+    m_downBtn = new QPushButton("\xe2\x96\xbc", this); // Unicode down triangle ▼
     m_downBtn->setFixedSize(36, 36);
     m_downBtn->setToolTip("Move selected effect down");
     m_downBtn->setEnabled(false);
     connect(m_downBtn, &QPushButton::clicked, this, &PipelineWidget::moveSelectedDown);
     btnLayout->addWidget(m_downBtn);
+
+    m_removeBtn = new QPushButton("\xf0\x9f\x97\x91", this); // Unicode wastebasket 🗑
+    m_removeBtn->setFixedSize(36, 36);
+    m_removeBtn->setToolTip("Remove selected effect");
+    m_removeBtn->setEnabled(false);
+    connect(m_removeBtn, &QPushButton::clicked, this, &PipelineWidget::removeSelectedEffect);
+    btnLayout->addWidget(m_removeBtn);
+
     btnLayout->addStretch();
     outerLayout->addLayout(btnLayout);
 }
@@ -127,6 +143,10 @@ void PipelineWidget::rebuild() {
         block->setPos(0, y);
         block->setSelected(i == m_selectedIndex);
         block->onClicked = [this](EffectBlockWidget* b) { onBlockClicked(b); };
+        block->onDoubleClicked = [this](EffectBlockWidget* b) {
+            onBlockClicked(b); // select it first
+            toggleSelectedEnabled();
+        };
 
         m_scene->addItem(block);
         m_blocks.push_back(block);
@@ -194,10 +214,24 @@ void PipelineWidget::moveSelectedDown() {
     updateButtons();
 }
 
+void PipelineWidget::toggleSelectedEnabled() {
+    if (!m_pipeline || m_selectedIndex < 0) return;
+    auto* effect = m_pipeline->effectAt(m_selectedIndex);
+    if (!effect) return;
+    effect->setEnabled(!effect->enabled());
+    // Update the block visual
+    if (m_selectedIndex < static_cast<int>(m_blocks.size()))
+        m_blocks[m_selectedIndex]->setBypassed(!effect->enabled());
+    updateButtons();
+}
+
 void PipelineWidget::updateButtons() {
     int count = m_pipeline ? m_pipeline->effectCount() : 0;
+    bool hasSelection = m_selectedIndex >= 0 && m_selectedIndex < count;
+    m_enableBtn->setEnabled(hasSelection);
     m_upBtn->setEnabled(m_selectedIndex > 0);
     m_downBtn->setEnabled(m_selectedIndex >= 0 && m_selectedIndex < count - 1);
+    m_removeBtn->setEnabled(hasSelection);
 }
 
 bool PipelineWidget::eventFilter(QObject* obj, QEvent* event) {

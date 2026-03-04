@@ -26,6 +26,9 @@ public:
     void setMonitorEnabled(bool enabled);
     bool monitorEnabled() const;
 
+    void setPlaybackActive(bool active) { m_device.setPlaybackActive(active); }
+    bool playbackActive() const { return m_device.playbackActive(); }
+
     // Input device selection
     static std::vector<AudioDevice> enumerateInputDevices() { return PipeWireDevice::enumerateInputDevices(); }
     void setInputDevice(uint32_t nodeId);

@@ -37,7 +37,9 @@ void PipeWireDevice::onCaptureProcess(void* userdata) {
 
     if (self->m_sourceStream)
         pw_stream_trigger_process(self->m_sourceStream);
-    if (self->m_monitorStream && self->m_monitorEnabled.load(std::memory_order_relaxed))
+    if (self->m_monitorStream &&
+        (self->m_monitorEnabled.load(std::memory_order_relaxed) ||
+         self->m_playbackActive.load(std::memory_order_relaxed)))
         pw_stream_trigger_process(self->m_monitorStream);
 }
 
@@ -69,7 +71,9 @@ void PipeWireDevice::onMonitorProcess(void* userdata) {
     auto* output = static_cast<float*>(d.data);
     int numFrames = self->m_processedFrames;
 
-    if (output && numFrames > 0 && self->m_monitorEnabled.load(std::memory_order_relaxed)) {
+    if (output && numFrames > 0 &&
+        (self->m_monitorEnabled.load(std::memory_order_relaxed) ||
+         self->m_playbackActive.load(std::memory_order_relaxed))) {
         std::memcpy(output, self->m_processBuffer, numFrames * sizeof(float));
         d.chunk->offset = 0;
         d.chunk->stride = sizeof(float);

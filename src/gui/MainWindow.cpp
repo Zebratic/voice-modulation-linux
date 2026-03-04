@@ -5,6 +5,7 @@
 #include "gui/EffectSettingsPanel.h"
 #include "gui/WaveformWidget.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/KeyframeTimelineWidget.h"
 #include "gui/SystemTray.h"
 #include "effects/EffectRegistry.h"
 #include "audio/ClipRecorder.h"
@@ -17,26 +18,31 @@
 #include <QLabel>
 #include <QInputDialog>
 #include <QMessageBox>
+#include <QFileDialog>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QShortcut>
 #include <QSettings>
+#include <QDir>
+#include <algorithm>
+#include <filesystem>
+#include <cctype>
 #include <QStyleFactory>
+#include <QFrame>
+#include <QFont>
 
 MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWidget* parent)
     : QMainWindow(parent), m_engine(engine), m_profileManager(profileManager) {
     setWindowTitle("VML - Voice Modulation for Linux");
-    setMinimumSize(800, 550);
+    setMinimumSize(900, 600);
     setupUI();
     setupToolbar();
     connectSignals();
-    refreshProfiles();
     refreshInputDevices();
     refreshOutputDevices();
 
     m_meterTimer.setInterval(30);
     connect(&m_meterTimer, &QTimer::timeout, this, [this]() {
-        // Drain input waveform ring buffer
         float buf[512];
         auto& inRb = m_engine.inputWaveform();
         size_t avail = inRb.availableRead();
@@ -47,7 +53,6 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
         }
         m_inputWaveform->setLevel(m_engine.inputLevel());
 
-        // Drain output waveform ring buffer
         auto& outRb = m_engine.outputWaveform();
         avail = outRb.availableRead();
         while (avail > 0) {
@@ -57,10 +62,6 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
             avail -= n;
         }
         m_outputWaveform->setLevel(m_engine.outputLevel());
-
-        // Feed spectrum analyzer from the output waveform data
-        // Re-read output ring buffer snapshot for spectrum
-        // (spectrum widget accumulates its own samples via pushSamples)
     });
     m_meterTimer.start();
 }
@@ -69,16 +70,370 @@ void MainWindow::setupUI() {
     m_tabWidget = new QTabWidget(this);
     setCentralWidget(m_tabWidget);
 
-    m_tabWidget->addTab(createEffectsTab(), "Effects");
+    m_tabWidget->addTab(createVoicesTab(), "Voices");
+    m_tabWidget->addTab(createEditVoiceTab(), "Edit Voice");
     m_tabWidget->addTab(createConfigurationTab(), "Configuration");
     m_tabWidget->addTab(createSettingsTab(), "Settings");
+
+    // Start on Voices tab
+    m_tabWidget->setCurrentIndex(0);
 }
 
-QWidget* MainWindow::createEffectsTab() {
+// ---------------------------------------------------------------------------
+// Voices Tab — grid of voice cards
+// ---------------------------------------------------------------------------
+
+QWidget* MainWindow::createVoicesTab() {
+    auto* page = new QWidget();
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(8, 8, 8, 8);
+
+    // Top row: New Voice, Import
+    auto* topRow = new QHBoxLayout();
+    auto* newBtn = new QPushButton("+ New Voice", page);
+    newBtn->setFixedHeight(32);
+    connect(newBtn, &QPushButton::clicked, this, &MainWindow::createNewVoice);
+    topRow->addWidget(newBtn);
+
+    auto* importBtn = new QPushButton("Import Voice", page);
+    importBtn->setFixedHeight(32);
+    connect(importBtn, &QPushButton::clicked, this, &MainWindow::importVoice);
+    topRow->addWidget(importBtn);
+
+    topRow->addStretch();
+    layout->addLayout(topRow);
+
+    // Scrollable grid of voice cards
+    m_voiceScrollArea = new QScrollArea(page);
+    m_voiceScrollArea->setWidgetResizable(true);
+    m_voiceScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_voiceScrollArea->setFrameShape(QFrame::NoFrame);
+
+    m_voiceGridWidget = new QWidget();
+    m_voiceGridLayout = new QGridLayout(m_voiceGridWidget);
+    m_voiceGridLayout->setSpacing(10);
+    m_voiceGridLayout->setContentsMargins(4, 4, 4, 4);
+
+    m_voiceScrollArea->setWidget(m_voiceGridWidget);
+    layout->addWidget(m_voiceScrollArea, 1);
+
+    rebuildVoiceGrid();
+    return page;
+}
+
+void MainWindow::rebuildVoiceGrid() {
+    // Clear existing cards
+    QLayoutItem* item;
+    while ((item = m_voiceGridLayout->takeAt(0)) != nullptr) {
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
+    }
+
+    auto profiles = m_profileManager.listProfiles();
+    int cols = 3;
+    int row = 0, col = 0;
+
+    for (auto& profile : profiles) {
+        bool isActive = (profile.filename == m_activeVoiceFilename);
+
+        // Card frame
+        auto* card = new QFrame(m_voiceGridWidget);
+        card->setFrameShape(QFrame::StyledPanel);
+        card->setMinimumSize(220, 120);
+        card->setMaximumHeight(140);
+        card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+        if (isActive) {
+            card->setStyleSheet(
+                "QFrame { background-color: #1a3a2a; border: 2px solid #2d7d2d; border-radius: 8px; }"
+                "QFrame:hover { background-color: #1f4530; }");
+        } else {
+            card->setStyleSheet(
+                "QFrame { background-color: #252535; border: 1px solid #444; border-radius: 8px; }"
+                "QFrame:hover { background-color: #2a2a40; border-color: #666; }");
+        }
+
+        auto* cardLayout = new QVBoxLayout(card);
+        cardLayout->setContentsMargins(12, 10, 12, 10);
+        cardLayout->setSpacing(6);
+
+        // Top row: name + tag
+        auto* headerRow = new QHBoxLayout();
+        auto* nameLabel = new QLabel(QString::fromStdString(profile.name), card);
+        QFont nameFont = nameLabel->font();
+        nameFont.setPointSize(12);
+        nameFont.setBold(true);
+        nameLabel->setFont(nameFont);
+        headerRow->addWidget(nameLabel);
+
+        headerRow->addStretch();
+
+        // Tag
+        auto* tag = new QLabel(profile.builtin ? "Built-in" : "Custom", card);
+        QFont tagFont = tag->font();
+        tagFont.setPixelSize(10);
+        tag->setFont(tagFont);
+        if (profile.builtin) {
+            tag->setStyleSheet("QLabel { color: #7da8c9; background-color: #1a2a3a; border-radius: 4px; padding: 2px 6px; }");
+        } else {
+            tag->setStyleSheet("QLabel { color: #c9a87d; background-color: #3a2a1a; border-radius: 4px; padding: 2px 6px; }");
+        }
+        headerRow->addWidget(tag);
+
+        if (isActive) {
+            auto* activeLabel = new QLabel("ACTIVE", card);
+            QFont af = activeLabel->font();
+            af.setPixelSize(10);
+            af.setBold(true);
+            activeLabel->setFont(af);
+            activeLabel->setStyleSheet("QLabel { color: #2d7d2d; padding: 2px 6px; }");
+            headerRow->addWidget(activeLabel);
+        }
+
+        cardLayout->addLayout(headerRow);
+
+        // Effect count summary
+        int effectCount = 0;
+        if (profile.data.contains("effects") && profile.data["effects"].is_array())
+            effectCount = static_cast<int>(profile.data["effects"].size());
+        auto* summaryLabel = new QLabel(QString("%1 effect%2").arg(effectCount).arg(effectCount != 1 ? "s" : ""), card);
+        summaryLabel->setStyleSheet("QLabel { color: #888; }");
+        QFont sf = summaryLabel->font();
+        sf.setPixelSize(11);
+        summaryLabel->setFont(sf);
+        cardLayout->addWidget(summaryLabel);
+
+        cardLayout->addStretch();
+
+        // Button row
+        auto* btnRow = new QHBoxLayout();
+
+        auto* activateBtn = new QPushButton(isActive ? "Active" : "Activate", card);
+        activateBtn->setFixedHeight(26);
+        activateBtn->setEnabled(!isActive);
+        if (isActive) {
+            activateBtn->setStyleSheet("QPushButton { background-color: #2d7d2d; color: white; border-radius: 4px; }");
+        }
+        std::string fn = profile.filename;
+        connect(activateBtn, &QPushButton::clicked, this, [this, fn]() {
+            activateVoice(fn);
+        });
+        btnRow->addWidget(activateBtn);
+
+        auto* editBtn = new QPushButton("Edit", card);
+        editBtn->setFixedHeight(26);
+        connect(editBtn, &QPushButton::clicked, this, [this, fn]() {
+            editVoice(fn);
+        });
+        btnRow->addWidget(editBtn);
+
+        auto* exportBtn = new QPushButton("Export", card);
+        exportBtn->setFixedHeight(26);
+        connect(exportBtn, &QPushButton::clicked, this, [this, fn]() {
+            exportVoice(fn);
+        });
+        btnRow->addWidget(exportBtn);
+
+        if (!profile.builtin) {
+            auto* deleteBtn = new QPushButton("Delete", card);
+            deleteBtn->setFixedHeight(26);
+            deleteBtn->setStyleSheet("QPushButton { color: #c44; }");
+            connect(deleteBtn, &QPushButton::clicked, this, [this, fn]() {
+                deleteVoice(fn);
+            });
+            btnRow->addWidget(deleteBtn);
+        }
+
+        cardLayout->addLayout(btnRow);
+
+        m_voiceGridLayout->addWidget(card, row, col);
+        col++;
+        if (col >= cols) {
+            col = 0;
+            row++;
+        }
+    }
+
+    // Fill remaining columns with spacers
+    if (col > 0) {
+        for (int c = col; c < cols; c++)
+            m_voiceGridLayout->addWidget(new QWidget(), row, c);
+    }
+
+    // Update tray profiles
+    QStringList names;
+    for (auto& p : profiles)
+        names << QString::fromStdString(p.name);
+    if (m_tray) m_tray->setProfiles(names);
+}
+
+void MainWindow::activateVoice(const std::string& filename) {
+    m_activeVoiceFilename = filename;
+    applyProfile(filename);
+    rebuildVoiceGrid();
+}
+
+void MainWindow::editVoice(const std::string& filename) {
+    m_editingVoiceFilename = filename;
+    applyProfile(filename);
+    m_activeVoiceFilename = filename;
+
+    try {
+        auto profile = m_profileManager.loadProfile(filename);
+        m_editingVoiceName = profile.name;
+        m_editingLabel->setText(QString("Editing: %1").arg(QString::fromStdString(profile.name)));
+    } catch (...) {
+        m_editingVoiceName = filename;
+        m_editingLabel->setText(QString("Editing: %1").arg(QString::fromStdString(filename)));
+    }
+
+    m_tabWidget->setCurrentIndex(1); // Switch to Edit Voice tab
+}
+
+void MainWindow::deleteVoice(const std::string& filename) {
+    try {
+        auto profile = m_profileManager.loadProfile(filename);
+        if (profile.builtin) {
+            QMessageBox::information(this, "Cannot Delete",
+                "Built-in voices cannot be deleted.");
+            return;
+        }
+    } catch (...) {}
+
+    auto reply = QMessageBox::question(this, "Delete Voice",
+        "Are you sure you want to delete this voice?",
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply != QMessageBox::Yes) return;
+
+    if (filename == m_activeVoiceFilename) {
+        m_engine.modulationManager().clear();
+        m_engine.pipeline().clear();
+        m_pipelineWidget->rebuild();
+        m_settingsPanel->clearEffect();
+        m_activeVoiceFilename.clear();
+    }
+
+    m_profileManager.deleteProfile(filename);
+    rebuildVoiceGrid();
+}
+
+void MainWindow::exportVoice(const std::string& filename) {
+    try {
+        auto profile = m_profileManager.loadProfile(filename);
+        QString defaultName = QString::fromStdString(profile.name) + ".json";
+        QString path = QFileDialog::getSaveFileName(this, "Export Voice",
+            QDir::homePath() + "/" + defaultName, "VML Voice (*.json)");
+        if (path.isEmpty()) return;
+        m_profileManager.exportProfile(filename, path.toStdString());
+    } catch (const std::exception& e) {
+        QMessageBox::warning(this, "Export Error", e.what());
+    }
+}
+
+void MainWindow::importVoice() {
+    QString path = QFileDialog::getOpenFileName(this, "Import Voice",
+        QDir::homePath(), "VML Voice (*.json)");
+    if (path.isEmpty()) return;
+
+    try {
+        m_profileManager.importProfile(path.toStdString());
+        rebuildVoiceGrid();
+    } catch (const std::exception& e) {
+        QMessageBox::warning(this, "Import Error",
+            QString("Failed to import voice: %1").arg(e.what()));
+    }
+}
+
+void MainWindow::createNewVoice() {
+    bool ok;
+    QString name = QInputDialog::getText(this, "New Voice", "Voice name:",
+        QLineEdit::Normal, "", &ok);
+    if (!ok || name.isEmpty()) return;
+
+    auto filename = name.toLower().replace(' ', '-').toStdString() + ".json";
+    auto json = ProfileManager::pipelineToJson(name.toStdString(), {});
+    json["version"] = 2;
+    json["modulators"] = nlohmann::json::array();
+    m_profileManager.saveProfile({name.toStdString(), filename, json, false});
+
+    editVoice(filename);
+    rebuildVoiceGrid();
+}
+
+void MainWindow::saveEditedVoice() {
+    if (m_editingVoiceFilename.empty()) return;
+
+    // Check if this is a built-in voice
+    try {
+        auto profile = m_profileManager.loadProfile(m_editingVoiceFilename);
+        if (profile.builtin) {
+            // Prompt user for a new name — can't overwrite built-in
+            bool ok = false;
+            QString newName = QInputDialog::getText(this, "Save as Copy",
+                "Built-in voices cannot be overwritten.\n"
+                "A copy will be created. Enter a name for the new voice:",
+                QLineEdit::Normal,
+                QString::fromStdString(m_editingVoiceName) + " (Custom)", &ok);
+            if (!ok || newName.trimmed().isEmpty()) return;
+
+            std::string name = newName.trimmed().toStdString();
+            // Generate a new filename
+            std::string base = name;
+            std::transform(base.begin(), base.end(), base.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            std::replace(base.begin(), base.end(), ' ', '-');
+            std::string newFilename = base + ".json";
+            int counter = 1;
+            auto dir = m_profileManager.profileDir();
+            while (std::filesystem::exists(dir / newFilename))
+                newFilename = base + "-" + std::to_string(counter++) + ".json";
+
+            savePipelineToProfile(name, newFilename);
+            m_editingVoiceFilename = newFilename;
+            m_editingVoiceName = name;
+            m_editingLabel->setText(QString("Editing: %1").arg(newName.trimmed()));
+            return;
+        }
+    } catch (...) {}
+
+    savePipelineToProfile(m_editingVoiceName, m_editingVoiceFilename);
+}
+
+void MainWindow::backToVoices() {
+    saveEditedVoice();
+    rebuildVoiceGrid();
+    m_tabWidget->setCurrentIndex(0);
+}
+
+// ---------------------------------------------------------------------------
+// Edit Voice Tab — the effects editor
+// ---------------------------------------------------------------------------
+
+QWidget* MainWindow::createEditVoiceTab() {
     auto* page = new QWidget();
     auto* mainLayout = new QVBoxLayout(page);
 
-    // Waveform indicators at top
+    // Top bar: back button + editing label + save button
+    auto* topBar = new QHBoxLayout();
+    auto* backBtn = new QPushButton("<< Back to Voices", page);
+    connect(backBtn, &QPushButton::clicked, this, &MainWindow::backToVoices);
+    topBar->addWidget(backBtn);
+
+    m_editingLabel = new QLabel("Editing: (none)", page);
+    QFont f = m_editingLabel->font();
+    f.setPointSize(12);
+    f.setBold(true);
+    m_editingLabel->setFont(f);
+    topBar->addWidget(m_editingLabel);
+    topBar->addStretch();
+
+    auto* saveBtn = new QPushButton("Save", page);
+    connect(saveBtn, &QPushButton::clicked, this, &MainWindow::saveEditedVoice);
+    topBar->addWidget(saveBtn);
+
+    mainLayout->addLayout(topBar);
+
+    // Waveform indicators
     auto* meterLayout = new QHBoxLayout();
     m_inputWaveform = new WaveformWidget(page);
     m_inputWaveform->setLabel("IN");
@@ -88,11 +443,11 @@ QWidget* MainWindow::createEffectsTab() {
     meterLayout->addWidget(m_outputWaveform);
     mainLayout->addLayout(meterLayout);
 
-    // Spectrum analyzer below waveforms
+    // Spectrum analyzer
     m_spectrumWidget = new SpectrumWidget(page);
     mainLayout->addWidget(m_spectrumWidget);
 
-    // Horizontal split: effect list | vertical pipeline | effect settings
+    // Horizontal split: effect list | pipeline | settings
     auto* splitter = new QSplitter(Qt::Horizontal, page);
 
     // Left: available effects list
@@ -115,19 +470,15 @@ QWidget* MainWindow::createEffectsTab() {
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::addSelectedEffect);
     effectListLayout->addWidget(addBtn);
 
-    auto* removeBtn = new QPushButton("Remove Selected", effectListWidget);
-    connect(removeBtn, &QPushButton::clicked, this, &MainWindow::removeSelectedEffect);
-    effectListLayout->addWidget(removeBtn);
-
     splitter->addWidget(effectListWidget);
 
-    // Center: vertical pipeline (input at top, output at bottom)
+    // Center: pipeline
     m_pipelineWidget = new PipelineWidget(splitter);
     m_pipelineWidget->setPipeline(&m_engine.pipeline());
     m_pipelineWidget->setModulationManager(&m_engine.modulationManager());
     splitter->addWidget(m_pipelineWidget);
 
-    // Right: effect settings panel
+    // Right: effect settings
     m_settingsPanel = new EffectSettingsPanel(splitter);
     m_settingsPanel->setModulationManager(&m_engine.modulationManager());
     m_pipelineWidget->setSettingsPanel(m_settingsPanel);
@@ -138,14 +489,25 @@ QWidget* MainWindow::createEffectsTab() {
     splitter->setStretchFactor(2, 2);
 
     mainLayout->addWidget(splitter, 1);
+
+    // Keyframe timeline (shows all keyframed params on one timeline)
+    m_keyframeTimeline = new KeyframeTimelineWidget(page);
+    m_keyframeTimeline->setModulationManager(&m_engine.modulationManager());
+    m_keyframeTimeline->setPipeline(&m_engine.pipeline());
+    m_keyframeTimeline->setMaximumHeight(250);
+    mainLayout->addWidget(m_keyframeTimeline);
+
     return page;
 }
+
+// ---------------------------------------------------------------------------
+// Configuration Tab
+// ---------------------------------------------------------------------------
 
 QWidget* MainWindow::createConfigurationTab() {
     auto* page = new QWidget();
     auto* layout = new QVBoxLayout(page);
 
-    // Input device group
     auto* inputGroup = new QGroupBox("Input Microphone", page);
     auto* inputLayout = new QVBoxLayout(inputGroup);
     inputLayout->addWidget(new QLabel("Select which physical microphone VML captures from:"));
@@ -159,7 +521,6 @@ QWidget* MainWindow::createConfigurationTab() {
     inputLayout->addLayout(inputRow);
     layout->addWidget(inputGroup);
 
-    // Monitor output group
     auto* outputGroup = new QGroupBox("Monitor Output", page);
     auto* outputLayout = new QVBoxLayout(outputGroup);
     outputLayout->addWidget(new QLabel("Select which speakers/headphones to use for monitor playback:"));
@@ -179,11 +540,14 @@ QWidget* MainWindow::createConfigurationTab() {
     return page;
 }
 
+// ---------------------------------------------------------------------------
+// Settings Tab
+// ---------------------------------------------------------------------------
+
 QWidget* MainWindow::createSettingsTab() {
     auto* page = new QWidget();
     auto* layout = new QVBoxLayout(page);
 
-    // Virtual mic name group
     auto* nameGroup = new QGroupBox("Virtual Microphone", page);
     auto* nameLayout = new QVBoxLayout(nameGroup);
     nameLayout->addWidget(new QLabel(
@@ -219,40 +583,14 @@ QWidget* MainWindow::createSettingsTab() {
     return page;
 }
 
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
+
 void MainWindow::setupToolbar() {
+    setContextMenuPolicy(Qt::NoContextMenu);
     auto* toolbar = addToolBar("Main");
     toolbar->setMovable(false);
-
-    toolbar->addWidget(new QLabel(" Profile: "));
-    m_profileCombo = new QComboBox();
-    m_profileCombo->setMinimumWidth(150);
-    toolbar->addWidget(m_profileCombo);
-
-    auto* saveBtn = new QPushButton("Save");
-    connect(saveBtn, &QPushButton::clicked, this, &MainWindow::saveCurrentProfile);
-    toolbar->addWidget(saveBtn);
-
-    auto* deleteBtn = new QPushButton("Delete");
-    connect(deleteBtn, &QPushButton::clicked, this, [this]() {
-        int idx = m_profileCombo->currentIndex();
-        if (idx <= 0) return; // "(None)" selected
-        auto filename = m_profileCombo->itemData(idx).toString().toStdString();
-        auto name = m_profileCombo->currentText();
-        auto reply = QMessageBox::question(this, "Delete Profile",
-            QString("Delete profile \"%1\"?").arg(name),
-            QMessageBox::Yes | QMessageBox::No);
-        if (reply == QMessageBox::Yes) {
-            m_engine.modulationManager().clear();
-            m_engine.pipeline().clear();
-            m_pipelineWidget->rebuild();
-            m_settingsPanel->clearEffect();
-            m_profileManager.deleteProfile(filename);
-            refreshProfiles();
-        }
-    });
-    toolbar->addWidget(deleteBtn);
-
-    toolbar->addSeparator();
 
     m_enableBtn = new QPushButton("Enabled");
     m_enableBtn->setCheckable(true);
@@ -268,31 +606,33 @@ void MainWindow::setupToolbar() {
 
     toolbar->addSeparator();
 
-    // Clip recorder controls
     m_recordBtn = new QPushButton("Record 3s Clip");
     connect(m_recordBtn, &QPushButton::clicked, this, &MainWindow::onRecordClicked);
     toolbar->addWidget(m_recordBtn);
 
-    m_loopPlaybackCheck = new QCheckBox("Loop Playback");
-    m_loopPlaybackCheck->setVisible(false);
-    connect(m_loopPlaybackCheck, &QCheckBox::toggled, this, [this](bool checked) {
+    m_playbackBtn = new QPushButton("Playback Recording");
+    m_playbackBtn->setCheckable(true);
+    m_playbackBtn->setEnabled(false);
+    m_playbackBtn->setStyleSheet("QPushButton:checked { background-color: #7d2d7d; }");
+    connect(m_playbackBtn, &QPushButton::toggled, this, [this](bool checked) {
         if (checked) {
             m_engine.clipRecorder().startPlayback();
-            m_recordBtn->setEnabled(false);
+            m_engine.setPlaybackActive(true);
         } else {
-            m_engine.clipRecorder().stopAndClear();
-            m_recordBtn->setEnabled(true);
-            m_loopPlaybackCheck->setVisible(false);
+            m_engine.clipRecorder().stopPlayback();
+            m_engine.setPlaybackActive(false);
         }
     });
-    toolbar->addWidget(m_loopPlaybackCheck);
+    toolbar->addWidget(m_playbackBtn);
 
-    // Timer for recording progress
     m_recordTimer.setInterval(100);
     connect(&m_recordTimer, &QTimer::timeout, this, &MainWindow::updateRecordingState);
 }
 
 void MainWindow::onRecordClicked() {
+    if (m_playbackBtn->isChecked())
+        m_playbackBtn->setChecked(false);
+    m_playbackBtn->setEnabled(false);
     m_engine.clipRecorder().startRecording();
     m_recordBtn->setEnabled(false);
     m_recordBtn->setText("Recording...");
@@ -305,15 +645,16 @@ void MainWindow::updateRecordingState() {
         float progress = rec.recordProgress();
         m_recordBtn->setText(QString("Recording %1%").arg(static_cast<int>(progress * 100)));
     } else {
-        // Recording finished
         m_recordTimer.stop();
         m_recordBtn->setText("Record 3s Clip");
         m_recordBtn->setEnabled(true);
-        if (rec.hasClip()) {
-            m_loopPlaybackCheck->setVisible(true);
-        }
+        m_playbackBtn->setEnabled(rec.hasClip());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Signals & Shortcuts
+// ---------------------------------------------------------------------------
 
 void MainWindow::connectSignals() {
     connect(m_enableBtn, &QPushButton::toggled, this, [this](bool checked) {
@@ -324,9 +665,6 @@ void MainWindow::connectSignals() {
         m_engine.setMonitorEnabled(checked);
     });
 
-    connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-        this, &MainWindow::loadProfile);
-
     connect(m_inputDeviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, &MainWindow::onInputDeviceChanged);
 
@@ -335,23 +673,9 @@ void MainWindow::connectSignals() {
 
     // Keyboard shortcuts
     auto* scEnable = new QShortcut(QKeySequence("Ctrl+E"), this);
-    connect(scEnable, &QShortcut::activated, this, [this]() {
-        m_enableBtn->toggle();
-    });
+    connect(scEnable, &QShortcut::activated, this, [this]() { m_enableBtn->toggle(); });
     auto* scMonitor = new QShortcut(QKeySequence("Ctrl+M"), this);
-    connect(scMonitor, &QShortcut::activated, this, [this]() {
-        m_monitorBtn->toggle();
-    });
-    auto* scNextProfile = new QShortcut(QKeySequence("Ctrl+Right"), this);
-    connect(scNextProfile, &QShortcut::activated, this, [this]() {
-        int next = m_profileCombo->currentIndex() + 1;
-        if (next < m_profileCombo->count()) m_profileCombo->setCurrentIndex(next);
-    });
-    auto* scPrevProfile = new QShortcut(QKeySequence("Ctrl+Left"), this);
-    connect(scPrevProfile, &QShortcut::activated, this, [this]() {
-        int prev = m_profileCombo->currentIndex() - 1;
-        if (prev >= 0) m_profileCombo->setCurrentIndex(prev);
-    });
+    connect(scMonitor, &QShortcut::activated, this, [this]() { m_monitorBtn->toggle(); });
 
     // System tray
     m_tray = new SystemTray(this);
@@ -364,30 +688,106 @@ void MainWindow::connectSignals() {
         m_monitorBtn->setChecked(e);
     });
     connect(m_tray, &SystemTray::showWindowRequested, this, [this]() {
-        show();
-        raise();
-        activateWindow();
+        show(); raise(); activateWindow();
     });
     connect(m_tray, &SystemTray::quitRequested, qApp, &QApplication::quit);
     connect(m_tray, &SystemTray::profileSelected, this, [this](int idx) {
-        m_profileCombo->setCurrentIndex(idx);
+        auto profiles = m_profileManager.listProfiles();
+        if (idx >= 0 && idx < static_cast<int>(profiles.size()))
+            activateVoice(profiles[idx].filename);
     });
+
+    // Rebuild keyframe timeline when modulation changes
+    connect(m_settingsPanel, &EffectSettingsPanel::modulationChanged,
+            this, [this]() { m_keyframeTimeline->rebuild(); });
+
+    // Rebuild voice grid after tray selection
+    rebuildVoiceGrid();
 }
 
-void MainWindow::refreshProfiles() {
-    m_profileCombo->blockSignals(true);
-    m_profileCombo->clear();
-    m_profileCombo->addItem("(None)");
+// ---------------------------------------------------------------------------
+// Profile loading/saving
+// ---------------------------------------------------------------------------
 
-    auto profiles = m_profileManager.listProfiles();
-    QStringList names;
-    for (auto& p : profiles) {
-        m_profileCombo->addItem(QString::fromStdString(p.name),
-            QString::fromStdString(p.filename));
-        names << QString::fromStdString(p.name);
+std::atomic<float>* MainWindow::resolveParam(const std::string& effectId, const std::string& paramId) {
+    int count = m_engine.pipeline().effectCount();
+    for (int i = 0; i < count; ++i) {
+        auto* effect = m_engine.pipeline().effectAt(i);
+        if (!effect || effect->id() != effectId) continue;
+        for (auto& p : effect->params()) {
+            if (p.id == paramId)
+                return &p.value;
+        }
     }
-    m_tray->setProfiles(names);
-    m_profileCombo->blockSignals(false);
+    return nullptr;
+}
+
+void MainWindow::applyProfile(const std::string& filename) {
+    try {
+        auto profile = m_profileManager.loadProfile(filename);
+        auto effects = ProfileManager::jsonToPipeline(profile.data);
+
+        m_engine.modulationManager().clear();
+        m_engine.pipeline().clear();
+        for (auto& [effectId, params] : effects) {
+            auto effect = EffectRegistry::instance().create(effectId);
+            if (!effect) continue;
+            for (auto& [pid, val] : params) {
+                for (auto& p : effect->params()) {
+                    if (p.id == pid)
+                        p.value.store(val, std::memory_order_relaxed);
+                }
+            }
+            m_engine.pipeline().addEffect(std::move(effect));
+        }
+
+        if (profile.data.contains("modulators") && profile.data["modulators"].is_array()) {
+            m_engine.modulationManager().fromJson(profile.data["modulators"],
+                [this](const std::string& eid, const std::string& pid) {
+                    return resolveParam(eid, pid);
+                });
+        }
+
+        m_pipelineWidget->rebuild();
+        m_settingsPanel->clearEffect();
+        m_keyframeTimeline->rebuild();
+    } catch (const std::exception& e) {
+        QMessageBox::warning(this, "Error", QString("Failed to load profile: %1").arg(e.what()));
+    }
+}
+
+void MainWindow::savePipelineToProfile(const std::string& name, const std::string& filename) {
+    std::vector<std::pair<std::string, std::vector<std::pair<std::string, float>>>> effects;
+
+    int count = m_engine.pipeline().effectCount();
+    for (int i = 0; i < count; ++i) {
+        auto* effect = m_engine.pipeline().effectAt(i);
+        if (!effect) continue;
+        std::vector<std::pair<std::string, float>> params;
+        for (auto& p : effect->params())
+            params.emplace_back(p.id, p.value.load(std::memory_order_relaxed));
+        effects.emplace_back(effect->id(), params);
+    }
+
+    auto json = ProfileManager::pipelineToJson(name, effects);
+    json["version"] = 2;
+    json["modulators"] = m_engine.modulationManager().toJson();
+
+    // Preserve builtin flag if editing a built-in profile
+    try {
+        auto existing = m_profileManager.loadProfile(filename);
+        if (existing.builtin)
+            json["builtin"] = true;
+    } catch (...) {}
+
+    m_profileManager.saveProfile({name, filename, json});
+}
+
+void MainWindow::addSelectedEffect() {
+    auto* item = m_effectList->currentItem();
+    if (!item) return;
+    auto effectId = item->data(Qt::UserRole).toString().toStdString();
+    m_pipelineWidget->addEffect(effectId);
 }
 
 void MainWindow::refreshInputDevices() {
@@ -432,103 +832,6 @@ void MainWindow::refreshOutputDevices() {
 
     m_outputDeviceCombo->setCurrentIndex(selectIdx);
     m_outputDeviceCombo->blockSignals(false);
-}
-
-void MainWindow::loadProfile(int index) {
-    if (index <= 0) return;
-    auto filename = m_profileCombo->itemData(index).toString().toStdString();
-    applyProfile(filename);
-}
-
-std::atomic<float>* MainWindow::resolveParam(const std::string& effectId, const std::string& paramId) {
-    int count = m_engine.pipeline().effectCount();
-    for (int i = 0; i < count; ++i) {
-        auto* effect = m_engine.pipeline().effectAt(i);
-        if (!effect || effect->id() != effectId) continue;
-        for (auto& p : effect->params()) {
-            if (p.id == paramId)
-                return &p.value;
-        }
-    }
-    return nullptr;
-}
-
-void MainWindow::applyProfile(const std::string& filename) {
-    try {
-        auto profile = m_profileManager.loadProfile(filename);
-        auto effects = ProfileManager::jsonToPipeline(profile.data);
-
-        m_engine.modulationManager().clear();
-        m_engine.pipeline().clear();
-        for (auto& [effectId, params] : effects) {
-            auto effect = EffectRegistry::instance().create(effectId);
-            if (!effect) continue;
-            for (auto& [pid, val] : params) {
-                for (auto& p : effect->params()) {
-                    if (p.id == pid)
-                        p.value.store(val, std::memory_order_relaxed);
-                }
-            }
-            m_engine.pipeline().addEffect(std::move(effect));
-        }
-
-        // Load modulators if present (version 2+)
-        if (profile.data.contains("modulators") && profile.data["modulators"].is_array()) {
-            m_engine.modulationManager().fromJson(profile.data["modulators"],
-                [this](const std::string& eid, const std::string& pid) {
-                    return resolveParam(eid, pid);
-                });
-        }
-
-        m_pipelineWidget->rebuild();
-        m_settingsPanel->clearEffect();
-    } catch (const std::exception& e) {
-        QMessageBox::warning(this, "Error", QString("Failed to load profile: %1").arg(e.what()));
-    }
-}
-
-void MainWindow::saveCurrentProfile() {
-    bool ok;
-    QString name = QInputDialog::getText(this, "Save Profile", "Profile name:",
-        QLineEdit::Normal, "", &ok);
-    if (!ok || name.isEmpty()) return;
-
-    auto filename = name.toLower().replace(' ', '-').toStdString() + ".json";
-    savePipelineToProfile(name.toStdString(), filename);
-    refreshProfiles();
-}
-
-void MainWindow::savePipelineToProfile(const std::string& name, const std::string& filename) {
-    std::vector<std::pair<std::string, std::vector<std::pair<std::string, float>>>> effects;
-
-    int count = m_engine.pipeline().effectCount();
-    for (int i = 0; i < count; ++i) {
-        auto* effect = m_engine.pipeline().effectAt(i);
-        if (!effect) continue;
-        std::vector<std::pair<std::string, float>> params;
-        for (auto& p : effect->params())
-            params.emplace_back(p.id, p.value.load(std::memory_order_relaxed));
-        effects.emplace_back(effect->id(), params);
-    }
-
-    auto json = ProfileManager::pipelineToJson(name, effects);
-
-    // Add modulators (version 2)
-    json["version"] = 2;
-    json["modulators"] = m_engine.modulationManager().toJson();
-
-    m_profileManager.saveProfile({name, filename, json});
-}
-
-void MainWindow::addSelectedEffect() {
-    auto* item = m_effectList->currentItem();
-    if (!item) return;
-    auto effectId = item->data(Qt::UserRole).toString().toStdString();
-    m_pipelineWidget->addEffect(effectId);
-}
-
-void MainWindow::removeSelectedEffect() {
-    m_pipelineWidget->removeSelectedEffect();
 }
 
 void MainWindow::onInputDeviceChanged(int index) {

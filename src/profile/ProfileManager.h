@@ -8,6 +8,7 @@ struct Profile {
     std::string name;
     std::string filename;
     nlohmann::json data;
+    bool builtin = false;
 };
 
 class ProfileManager {
@@ -27,8 +28,16 @@ public:
 
     std::filesystem::path profileDir() const { return m_profileDir; }
 
+    // Install built-in profiles (only writes files that don't exist yet)
     void installDefaultProfiles() const;
 
+    // Export a profile to an external path
+    void exportProfile(const std::string& filename, const std::filesystem::path& destPath) const;
+
+    // Import a profile from an external path. Returns the new filename.
+    std::string importProfile(const std::filesystem::path& srcPath) const;
+
 private:
+    void installIfMissing(const Profile& profile) const;
     std::filesystem::path m_profileDir;
 };

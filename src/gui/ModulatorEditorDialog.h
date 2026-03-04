@@ -31,7 +31,7 @@ private:
     float m_paramMax;
 };
 
-// Custom widget for keyframe curve editing
+// Custom widget for keyframe curve editing and curve preview
 class KeyframeCurveWidget : public QWidget {
     Q_OBJECT
 public:
@@ -39,6 +39,10 @@ public:
 
     void setKeyframes(const std::vector<Keyframe>& keyframes);
     std::vector<Keyframe> keyframes() const { return m_keyframes; }
+
+    // Set curve mode — for non-Keyframe modes, renders a read-only preview
+    void setCurveMode(ModCurve mode);
+    ModCurve curveMode() const { return m_curveMode; }
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -52,7 +56,10 @@ private:
     QPointF keyframeToWidget(const Keyframe& kf) const;
     Keyframe widgetToKeyframe(const QPointF& p) const;
     int hitTest(const QPointF& pos) const;
+    float evaluateCurve(float t) const;
+    void drawCurvePreview(QPainter& p, float margin, float w, float h);
 
     std::vector<Keyframe> m_keyframes;
     int m_dragIndex = -1;
+    ModCurve m_curveMode = ModCurve::Keyframe;
 };

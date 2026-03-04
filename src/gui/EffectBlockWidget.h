@@ -19,6 +19,7 @@ public:
     void setBypassed(bool b);
 
     std::function<void(EffectBlockWidget*)> onClicked;
+    std::function<void(EffectBlockWidget*)> onDoubleClicked;
 
     static constexpr qreal BLOCK_W = 200;
     static constexpr qreal BLOCK_H = 50;

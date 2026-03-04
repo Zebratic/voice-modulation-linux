@@ -7,6 +7,10 @@
 #include <QCheckBox>
 #include <QTabWidget>
 #include <QTimer>
+#include <QScrollArea>
+#include <QGridLayout>
+#include <QStackedWidget>
+#include <QLabel>
 
 class AudioEngine;
 class ProfileManager;
@@ -14,6 +18,7 @@ class PipelineWidget;
 class EffectSettingsPanel;
 class WaveformWidget;
 class SpectrumWidget;
+class KeyframeTimelineWidget;
 class SystemTray;
 
 class MainWindow : public QMainWindow {
@@ -29,17 +34,24 @@ private:
     void setupToolbar();
     void connectSignals();
 
-    QWidget* createEffectsTab();
+    QWidget* createVoicesTab();
+    QWidget* createEditVoiceTab();
     QWidget* createConfigurationTab();
     QWidget* createSettingsTab();
 
-    void refreshProfiles();
+    void rebuildVoiceGrid();
+    void activateVoice(const std::string& filename);
+    void editVoice(const std::string& filename);
+    void deleteVoice(const std::string& filename);
+    void exportVoice(const std::string& filename);
+    void importVoice();
+    void createNewVoice();
+    void saveEditedVoice();
+    void backToVoices();
+
     void refreshInputDevices();
     void refreshOutputDevices();
-    void loadProfile(int index);
-    void saveCurrentProfile();
     void addSelectedEffect();
-    void removeSelectedEffect();
     void onInputDeviceChanged(int index);
     void onOutputDeviceChanged(int index);
     void onVirtualMicNameChanged();
@@ -60,13 +72,23 @@ private:
 
     QTabWidget* m_tabWidget;
 
-    // Effects tab
+    // Voices tab
+    QScrollArea* m_voiceScrollArea;
+    QWidget* m_voiceGridWidget;
+    QGridLayout* m_voiceGridLayout;
+    std::string m_activeVoiceFilename;
+
+    // Edit Voice tab
+    std::string m_editingVoiceFilename;
+    std::string m_editingVoiceName;
     PipelineWidget* m_pipelineWidget;
     EffectSettingsPanel* m_settingsPanel;
     QListWidget* m_effectList;
     WaveformWidget* m_inputWaveform;
     WaveformWidget* m_outputWaveform;
     SpectrumWidget* m_spectrumWidget;
+    KeyframeTimelineWidget* m_keyframeTimeline;
+    QLabel* m_editingLabel;
 
     // Configuration tab
     QComboBox* m_inputDeviceCombo;
@@ -76,11 +98,10 @@ private:
     QLineEdit* m_virtualMicNameEdit;
 
     // Toolbar
-    QComboBox* m_profileCombo;
     QPushButton* m_enableBtn;
     QPushButton* m_monitorBtn;
     QPushButton* m_recordBtn;
-    QCheckBox* m_loopPlaybackCheck;
+    QPushButton* m_playbackBtn;
     QTimer m_recordTimer;
 
     SystemTray* m_tray;

@@ -37,6 +37,9 @@ public:
     void setMonitorEnabled(bool enabled);
     bool monitorEnabled() const { return m_monitorEnabled.load(); }
 
+    void setPlaybackActive(bool active) { m_playbackActive.store(active, std::memory_order_relaxed); }
+    bool playbackActive() const { return m_playbackActive.load(std::memory_order_relaxed); }
+
     void setVirtualMicName(const std::string& name);
     std::string virtualMicName() const { return m_virtualMicName; }
     void reconnectSource();
@@ -69,6 +72,7 @@ private:
     AudioCallback m_callback;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_monitorEnabled{false};
+    std::atomic<bool> m_playbackActive{false};
     uint32_t m_targetInputId = PW_ID_ANY;
     uint32_t m_targetMonitorId = PW_ID_ANY;
     std::string m_virtualMicName = "VML Virtual Microphone";
