@@ -1,0 +1,8 @@
+{
+  "name": "Deep Voice",
+  "version": 1,
+  "effects": [
+    {"id": "pitch_shift", "enabled": true, "params": {"semitones": -4.0}},
+    {"id": "gain", "enabled": true, "params": {"gain_db": 3.0}}
+  ]
+}

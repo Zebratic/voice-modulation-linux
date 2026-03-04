@@ -1,0 +1,85 @@
+#pragma once
+#include <atomic>
+#include <vector>
+#include <cstring>
+
+class ClipRecorder {
+public:
+    enum class State { Idle, Recording, PlaybackLoop };
+
+    explicit ClipRecorder(float sampleRate = 48000.f, float clipSeconds = 3.f)
+        : m_sampleRate(sampleRate),
+          m_clipLength(static_cast<int>(sampleRate * clipSeconds)),
+          m_buffer(m_clipLength, 0.f) {}
+
+    // Start recording. Call from GUI thread.
+    void startRecording() {
+        m_writePos = 0;
+        m_readPos = 0;
+        m_recordedLength = 0;
+        std::fill(m_buffer.begin(), m_buffer.end(), 0.f);
+        m_state.store(State::Recording, std::memory_order_release);
+    }
+
+    // Start looped playback. Call from GUI thread.
+    void startPlayback() {
+        m_readPos = 0;
+        m_state.store(State::PlaybackLoop, std::memory_order_release);
+    }
+
+    // Stop playback and clear. Call from GUI thread.
+    void stopAndClear() {
+        m_state.store(State::Idle, std::memory_order_release);
+        m_writePos = 0;
+        m_readPos = 0;
+        m_recordedLength = 0;
+    }
+
+    // Called from audio callback during Recording state.
+    // Copies input into buffer. Returns true while recording, false when done.
+    bool recordBlock(const float* input, int numFrames) {
+        if (m_state.load(std::memory_order_acquire) != State::Recording) return false;
+
+        int remaining = m_clipLength - m_writePos;
+        int toCopy = std::min(numFrames, remaining);
+        if (toCopy > 0) {
+            std::memcpy(m_buffer.data() + m_writePos, input, toCopy * sizeof(float));
+            m_writePos += toCopy;
+        }
+
+        if (m_writePos >= m_clipLength) {
+            m_recordedLength = m_clipLength;
+            m_state.store(State::Idle, std::memory_order_release);
+            return false; // done
+        }
+        return true; // still recording
+    }
+
+    // Called from audio callback during PlaybackLoop state.
+    // Fills output with looped clip data.
+    void playBlock(float* output, int numFrames) {
+        if (m_state.load(std::memory_order_acquire) != State::PlaybackLoop || m_recordedLength == 0)
+            return;
+
+        for (int i = 0; i < numFrames; ++i) {
+            output[i] = m_buffer[m_readPos];
+            m_readPos = (m_readPos + 1) % m_recordedLength;
+        }
+    }
+
+    State state() const { return m_state.load(std::memory_order_acquire); }
+    bool hasClip() const { return m_recordedLength > 0; }
+    float recordProgress() const {
+        if (m_state.load(std::memory_order_acquire) != State::Recording) return 0.f;
+        return static_cast<float>(m_writePos) / static_cast<float>(m_clipLength);
+    }
+
+private:
+    float m_sampleRate;
+    int m_clipLength;
+    std::vector<float> m_buffer;
+    std::atomic<State> m_state{State::Idle};
+    int m_writePos = 0;
+    int m_readPos = 0;
+    int m_recordedLength = 0;
+};

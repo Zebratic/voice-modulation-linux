@@ -1,0 +1,9 @@
+{
+  "name": "Radio",
+  "version": 1,
+  "effects": [
+    {"id": "noise_gate", "enabled": true, "params": {"threshold_db": -35.0}},
+    {"id": "gain", "enabled": true, "params": {"gain_db": 6.0}},
+    {"id": "reverb", "enabled": true, "params": {"room_size": 0.2, "damping": 0.9, "mix": 0.1}}
+  ]
+}

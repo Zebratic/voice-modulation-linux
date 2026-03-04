@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VML - Voice Modulation for Linux
+Comment=Real-time voice modulation with virtual microphone
+Exec=vml
+Icon=vml-icon
+Categories=AudioVideo;Audio;
+Keywords=voice;modulation;microphone;effects;
+StartupNotify=true
+Terminal=false
