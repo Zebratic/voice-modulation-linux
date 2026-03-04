@@ -18,13 +18,13 @@ Real-time voice effects processor that creates a virtual microphone through Pipe
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/USER/vml/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zebratic/vml/main/scripts/install.sh | bash
 ```
 
 Or clone and run locally:
 
 ```bash
-git clone https://github.com/USER/vml.git
+git clone https://github.com/zebratic/vml.git
 cd vml
 bash scripts/install.sh
 ```
