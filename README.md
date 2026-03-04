@@ -31,12 +31,6 @@ bash scripts/install.sh
 
 The install script detects your package manager (pacman / apt / dnf), installs dependencies, builds from source, and installs to `/usr/local`.
 
-### Arch Linux (AUR)
-
-```bash
-yay -S vml
-```
-
 ## Manual Build
 
 ```bash
@@ -83,7 +77,6 @@ Right-click the tray icon to switch profiles, enable/disable processing, or togg
 bash scripts/install.sh --uninstall
 ```
 
-Or if installed via AUR: `yay -R vml`
 
 ## License
 
