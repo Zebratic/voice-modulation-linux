@@ -7,9 +7,9 @@ class ClipRecorder {
 public:
     enum class State { Idle, Recording, PlaybackLoop };
 
-    explicit ClipRecorder(float sampleRate = 48000.f, float clipSeconds = 3.f)
+    explicit ClipRecorder(float sampleRate = 48000.f, float maxSeconds = 10.f)
         : m_sampleRate(sampleRate),
-          m_clipLength(static_cast<int>(sampleRate * clipSeconds)),
+          m_clipLength(static_cast<int>(sampleRate * maxSeconds)),
           m_buffer(m_clipLength, 0.f) {}
 
     // Start recording. Call from GUI thread.
@@ -25,6 +25,14 @@ public:
     void startPlayback() {
         m_readPos = 0;
         m_state.store(State::PlaybackLoop, std::memory_order_release);
+    }
+
+    // Stop recording early. Keeps whatever was recorded. Call from GUI thread.
+    void stopRecording() {
+        if (m_state.load(std::memory_order_acquire) != State::Recording) return;
+        int wp = m_writePos.load(std::memory_order_relaxed);
+        m_recordedLength.store(wp, std::memory_order_release);
+        m_state.store(State::Idle, std::memory_order_release);
     }
 
     // Stop playback but keep the clip. Call from GUI thread.
@@ -82,6 +90,12 @@ public:
         if (m_state.load(std::memory_order_acquire) != State::Recording) return 0.f;
         return static_cast<float>(m_writePos.load(std::memory_order_relaxed)) /
                static_cast<float>(m_clipLength);
+    }
+    float recordedSeconds() const {
+        return static_cast<float>(m_writePos.load(std::memory_order_relaxed)) / m_sampleRate;
+    }
+    float maxSeconds() const {
+        return static_cast<float>(m_clipLength) / m_sampleRate;
     }
 
 private:

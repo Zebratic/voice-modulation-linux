@@ -104,6 +104,6 @@ private:
     QPushButton* m_playbackBtn;
     QTimer m_recordTimer;
 
-    SystemTray* m_tray;
+    SystemTray* m_tray = nullptr;
     QTimer m_meterTimer;
 };

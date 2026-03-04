@@ -606,7 +606,7 @@ void MainWindow::setupToolbar() {
 
     toolbar->addSeparator();
 
-    m_recordBtn = new QPushButton("Record 3s Clip");
+    m_recordBtn = new QPushButton("Record Clip");
     connect(m_recordBtn, &QPushButton::clicked, this, &MainWindow::onRecordClicked);
     toolbar->addWidget(m_recordBtn);
 
@@ -630,24 +630,38 @@ void MainWindow::setupToolbar() {
 }
 
 void MainWindow::onRecordClicked() {
+    auto& rec = m_engine.clipRecorder();
+
+    // If currently recording, stop
+    if (rec.state() == ClipRecorder::State::Recording) {
+        rec.stopRecording();
+        m_recordTimer.stop();
+        m_recordBtn->setText("Record Clip");
+        m_recordBtn->setStyleSheet("");
+        m_playbackBtn->setEnabled(rec.hasClip());
+        return;
+    }
+
+    // Start recording
     if (m_playbackBtn->isChecked())
         m_playbackBtn->setChecked(false);
     m_playbackBtn->setEnabled(false);
-    m_engine.clipRecorder().startRecording();
-    m_recordBtn->setEnabled(false);
-    m_recordBtn->setText("Recording...");
+    rec.startRecording();
+    m_recordBtn->setText("Stop (0.0s)");
+    m_recordBtn->setStyleSheet("background-color: #cc3333; color: white; font-weight: bold;");
     m_recordTimer.start();
 }
 
 void MainWindow::updateRecordingState() {
     auto& rec = m_engine.clipRecorder();
     if (rec.state() == ClipRecorder::State::Recording) {
-        float progress = rec.recordProgress();
-        m_recordBtn->setText(QString("Recording %1%").arg(static_cast<int>(progress * 100)));
+        float seconds = rec.recordedSeconds();
+        m_recordBtn->setText(QString("Stop (%1s)").arg(seconds, 0, 'f', 1));
     } else {
+        // Auto-stopped at max length
         m_recordTimer.stop();
-        m_recordBtn->setText("Record 3s Clip");
-        m_recordBtn->setEnabled(true);
+        m_recordBtn->setText("Record Clip");
+        m_recordBtn->setStyleSheet("");
         m_playbackBtn->setEnabled(rec.hasClip());
     }
 }

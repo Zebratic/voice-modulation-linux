@@ -4,7 +4,7 @@
 #include <cstring>
 
 AudioEngine::AudioEngine()
-    : m_clipRecorder(m_device.sampleRate(), 3.f) {
+    : m_clipRecorder(m_device.sampleRate(), 10.f) {
     m_pipeline.prepare(m_device.sampleRate(), m_device.blockSize());
     m_pipeline.setModulationManager(&m_modulationMgr);
 }
