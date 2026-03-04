@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO_URL="https://github.com/zebratic/vml.git"
+REPO_URL="https://github.com/Zebratic/voice-modulation-linux.git"
 PREFIX="${PREFIX:-/usr/local}"
 BUILD_DIR="build"
 
