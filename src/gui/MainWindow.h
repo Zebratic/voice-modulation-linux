@@ -12,7 +12,8 @@ class AudioEngine;
 class ProfileManager;
 class PipelineWidget;
 class EffectSettingsPanel;
-class VuMeter;
+class WaveformWidget;
+class SpectrumWidget;
 class SystemTray;
 
 class MainWindow : public QMainWindow {
@@ -49,6 +50,7 @@ private:
     // Clip recorder
     void onRecordClicked();
     void updateRecordingState();
+    void applyTheme(bool dark);
 
     // Modulation param resolver for profile loading
     std::atomic<float>* resolveParam(const std::string& effectId, const std::string& paramId);
@@ -62,8 +64,9 @@ private:
     PipelineWidget* m_pipelineWidget;
     EffectSettingsPanel* m_settingsPanel;
     QListWidget* m_effectList;
-    VuMeter* m_inputMeter;
-    VuMeter* m_outputMeter;
+    WaveformWidget* m_inputWaveform;
+    WaveformWidget* m_outputWaveform;
+    SpectrumWidget* m_spectrumWidget;
 
     // Configuration tab
     QComboBox* m_inputDeviceCombo;

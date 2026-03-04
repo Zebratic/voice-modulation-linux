@@ -3,6 +3,7 @@
 #include <QGraphicsTextItem>
 #include <QGraphicsSceneMouseEvent>
 #include <QString>
+#include <QPointF>
 #include <functional>
 
 class EffectBlockWidget : public QGraphicsRectItem {
@@ -25,6 +26,7 @@ public:
 
 protected:
     void mousePressEvent(QGraphicsSceneMouseEvent* event) override;
+    void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override;
     void mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) override;
 
 private:
@@ -36,4 +38,5 @@ private:
     bool m_bypassed = false;
     bool m_isSelected = false;
     QGraphicsTextItem* m_label;
+    QPointF m_dragStartPos;
 };

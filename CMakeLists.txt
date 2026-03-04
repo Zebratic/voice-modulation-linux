@@ -36,6 +36,14 @@ set(VML_SOURCES
     src/effects/PitchShiftEffect.cpp
     src/effects/ReverbEffect.cpp
     src/effects/BitCrushEffect.cpp
+    src/effects/RingModulatorEffect.cpp
+    src/effects/DistortionEffect.cpp
+    src/effects/TelephoneFilterEffect.cpp
+    src/effects/ChorusEffect.cpp
+    src/effects/FlangerEffect.cpp
+    src/effects/PhaserEffect.cpp
+    src/effects/CompressorEffect.cpp
+    src/effects/FormantShifterEffect.cpp
     src/modulation/Modulator.cpp
     src/modulation/ModulationManager.cpp
     src/gui/MainWindow.cpp
@@ -44,6 +52,8 @@ set(VML_SOURCES
     src/gui/EffectSettingsPanel.cpp
     src/gui/SystemTray.cpp
     src/gui/VuMeter.cpp
+    src/gui/WaveformWidget.cpp
+    src/gui/SpectrumWidget.cpp
     src/gui/ModulatorEditorDialog.cpp
     src/profile/ProfileManager.cpp
 )

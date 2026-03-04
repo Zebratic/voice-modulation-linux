@@ -2,6 +2,10 @@
 #include <QBrush>
 #include <QPen>
 #include <QFont>
+#include <QDrag>
+#include <QMimeData>
+#include <QWidget>
+#include <QGraphicsView>
 
 EffectBlockWidget::EffectBlockWidget(const QString& effectId, const QString& name, int index)
     : m_effectId(effectId), m_name(name), m_index(index) {
@@ -46,9 +50,24 @@ void EffectBlockWidget::updateAppearance() {
 }
 
 void EffectBlockWidget::mousePressEvent(QGraphicsSceneMouseEvent* event) {
-    if (event->button() == Qt::LeftButton && onClicked)
-        onClicked(this);
+    if (event->button() == Qt::LeftButton) {
+        m_dragStartPos = event->scenePos();
+        if (onClicked) onClicked(this);
+    }
     QGraphicsRectItem::mousePressEvent(event);
+}
+
+void EffectBlockWidget::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
+    if (!(event->buttons() & Qt::LeftButton)) return;
+    QPointF diff = event->scenePos() - m_dragStartPos;
+    if (diff.manhattanLength() < 5) return;
+
+    auto* drag = new QDrag(event->widget());
+    auto* mimeData = new QMimeData();
+    mimeData->setData("application/x-vml-effect-index",
+                       QByteArray::number(m_index));
+    drag->setMimeData(mimeData);
+    drag->exec(Qt::MoveAction);
 }
 
 void EffectBlockWidget::mouseDoubleClickEvent(QGraphicsSceneMouseEvent*) {

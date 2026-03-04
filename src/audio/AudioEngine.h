@@ -2,6 +2,7 @@
 #include "audio/PipeWireDevice.h"
 #include "audio/EffectPipeline.h"
 #include "audio/ClipRecorder.h"
+#include "audio/RingBuffer.h"
 #include "modulation/ModulationManager.h"
 #include <atomic>
 #include <memory>
@@ -42,6 +43,10 @@ public:
     float inputLevel() const { return m_inputLevel.load(std::memory_order_relaxed); }
     float outputLevel() const { return m_pipeline.lastPeakLevel(); }
 
+    // Waveform ring buffers for GUI visualization (read from GUI thread)
+    RingBuffer& inputWaveform() { return m_inputWaveform; }
+    RingBuffer& outputWaveform() { return m_outputWaveform; }
+
 private:
     void audioCallback(float* input, float* output, int numFrames);
 
@@ -49,6 +54,8 @@ private:
     EffectPipeline m_pipeline;
     ModulationManager m_modulationMgr;
     ClipRecorder m_clipRecorder;
+    RingBuffer m_inputWaveform{4096};
+    RingBuffer m_outputWaveform{4096};
     std::atomic<bool> m_enabled{true};
     std::atomic<float> m_inputLevel{0.f};
 };

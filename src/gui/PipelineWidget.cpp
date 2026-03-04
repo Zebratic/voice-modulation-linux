@@ -5,6 +5,10 @@
 #include "modulation/ModulationManager.h"
 #include <QHBoxLayout>
 #include <QGraphicsLineItem>
+#include <QGraphicsSceneDragDropEvent>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QPen>
 #include <QFont>
 #include <algorithm>
@@ -26,6 +30,9 @@ PipelineWidget::PipelineWidget(QWidget* parent) : QWidget(parent) {
     m_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_view->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_view->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+    m_view->setAcceptDrops(true);
+    m_view->viewport()->setAcceptDrops(true);
+    m_view->viewport()->installEventFilter(this);
     outerLayout->addWidget(m_view, 1);
 
     // Up/Down buttons on the right side
@@ -191,4 +198,50 @@ void PipelineWidget::updateButtons() {
     int count = m_pipeline ? m_pipeline->effectCount() : 0;
     m_upBtn->setEnabled(m_selectedIndex > 0);
     m_downBtn->setEnabled(m_selectedIndex >= 0 && m_selectedIndex < count - 1);
+}
+
+bool PipelineWidget::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == m_view->viewport()) {
+        if (event->type() == QEvent::DragEnter) {
+            auto* de = static_cast<QDragEnterEvent*>(event);
+            if (de->mimeData()->hasFormat("application/x-vml-effect-index")) {
+                de->acceptProposedAction();
+                return true;
+            }
+        } else if (event->type() == QEvent::DragMove) {
+            auto* de = static_cast<QDragMoveEvent*>(event);
+            de->acceptProposedAction();
+            return true;
+        } else if (event->type() == QEvent::Drop) {
+            auto* de = static_cast<QDropEvent*>(event);
+            if (de->mimeData()->hasFormat("application/x-vml-effect-index")) {
+                int fromIndex = de->mimeData()->data("application/x-vml-effect-index").toInt();
+                // Compute target index from Y position
+                QPointF scenePos = m_view->mapToScene(de->position().toPoint());
+                // Each block starts at LABEL_H + SPACING + i*(BLOCK_H+SPACING)
+                float baseY = LABEL_H + SPACING;
+                int toIndex = static_cast<int>((scenePos.y() - baseY) / (BLOCK_H + SPACING));
+                int count = m_pipeline ? m_pipeline->effectCount() : 0;
+                toIndex = std::clamp(toIndex, 0, count - 1);
+                handleDrop(fromIndex, toIndex);
+                de->acceptProposedAction();
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+void PipelineWidget::handleDrop(int fromIndex, int toIndex) {
+    if (!m_pipeline || fromIndex == toIndex) return;
+    int count = m_pipeline->effectCount();
+    if (fromIndex < 0 || fromIndex >= count || toIndex < 0 || toIndex >= count) return;
+    m_pipeline->moveEffect(fromIndex, toIndex);
+    m_selectedIndex = toIndex;
+    rebuild();
+    if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_blocks.size()))
+        m_blocks[m_selectedIndex]->setSelected(true);
+    if (m_settingsPanel && m_pipeline)
+        m_settingsPanel->setEffect(m_pipeline->effectAt(m_selectedIndex));
+    updateButtons();
 }

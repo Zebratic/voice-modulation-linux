@@ -63,6 +63,9 @@ void AudioEngine::audioCallback(float* input, float* output, int numFrames) {
         peak = std::max(peak, std::abs(input[i]));
     m_inputLevel.store(peak, std::memory_order_relaxed);
 
+    // Push input samples for waveform display
+    m_inputWaveform.write(input, numFrames);
+
     // Record mic input if recording
     if (m_clipRecorder.state() == ClipRecorder::State::Recording)
         m_clipRecorder.recordBlock(input, numFrames);
@@ -74,4 +77,7 @@ void AudioEngine::audioCallback(float* input, float* output, int numFrames) {
     if (m_enabled.load(std::memory_order_relaxed)) {
         m_pipeline.process(output, numFrames);
     }
+
+    // Push output samples for waveform display
+    m_outputWaveform.write(output, numFrames);
 }

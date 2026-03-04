@@ -3,7 +3,8 @@
 #include "profile/ProfileManager.h"
 #include "gui/PipelineWidget.h"
 #include "gui/EffectSettingsPanel.h"
-#include "gui/VuMeter.h"
+#include "gui/WaveformWidget.h"
+#include "gui/SpectrumWidget.h"
 #include "gui/SystemTray.h"
 #include "effects/EffectRegistry.h"
 #include "audio/ClipRecorder.h"
@@ -18,6 +19,9 @@
 #include <QMessageBox>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QShortcut>
+#include <QSettings>
+#include <QStyleFactory>
 
 MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWidget* parent)
     : QMainWindow(parent), m_engine(engine), m_profileManager(profileManager) {
@@ -32,8 +36,31 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
 
     m_meterTimer.setInterval(30);
     connect(&m_meterTimer, &QTimer::timeout, this, [this]() {
-        m_inputMeter->setLevel(m_engine.inputLevel());
-        m_outputMeter->setLevel(m_engine.outputLevel());
+        // Drain input waveform ring buffer
+        float buf[512];
+        auto& inRb = m_engine.inputWaveform();
+        size_t avail = inRb.availableRead();
+        while (avail > 0) {
+            size_t n = inRb.read(buf, std::min(avail, size_t(512)));
+            m_inputWaveform->pushSamples(buf, static_cast<int>(n));
+            avail -= n;
+        }
+        m_inputWaveform->setLevel(m_engine.inputLevel());
+
+        // Drain output waveform ring buffer
+        auto& outRb = m_engine.outputWaveform();
+        avail = outRb.availableRead();
+        while (avail > 0) {
+            size_t n = outRb.read(buf, std::min(avail, size_t(512)));
+            m_outputWaveform->pushSamples(buf, static_cast<int>(n));
+            m_spectrumWidget->pushSamples(buf, static_cast<int>(n));
+            avail -= n;
+        }
+        m_outputWaveform->setLevel(m_engine.outputLevel());
+
+        // Feed spectrum analyzer from the output waveform data
+        // Re-read output ring buffer snapshot for spectrum
+        // (spectrum widget accumulates its own samples via pushSamples)
     });
     m_meterTimer.start();
 }
@@ -51,15 +78,19 @@ QWidget* MainWindow::createEffectsTab() {
     auto* page = new QWidget();
     auto* mainLayout = new QVBoxLayout(page);
 
-    // VU Meters at top
+    // Waveform indicators at top
     auto* meterLayout = new QHBoxLayout();
-    m_inputMeter = new VuMeter(page);
-    m_inputMeter->setLabel("IN");
-    m_outputMeter = new VuMeter(page);
-    m_outputMeter->setLabel("OUT");
-    meterLayout->addWidget(m_inputMeter);
-    meterLayout->addWidget(m_outputMeter);
+    m_inputWaveform = new WaveformWidget(page);
+    m_inputWaveform->setLabel("IN");
+    m_outputWaveform = new WaveformWidget(page);
+    m_outputWaveform->setLabel("OUT");
+    meterLayout->addWidget(m_inputWaveform);
+    meterLayout->addWidget(m_outputWaveform);
     mainLayout->addLayout(meterLayout);
+
+    // Spectrum analyzer below waveforms
+    m_spectrumWidget = new SpectrumWidget(page);
+    mainLayout->addWidget(m_spectrumWidget);
 
     // Horizontal split: effect list | vertical pipeline | effect settings
     auto* splitter = new QSplitter(Qt::Horizontal, page);
@@ -169,6 +200,20 @@ QWidget* MainWindow::createSettingsTab() {
     nameLayout->addWidget(new QLabel(
         "After changing, you may need to re-select the input device in your application."));
     layout->addWidget(nameGroup);
+
+    // Theme toggle
+    auto* themeGroup = new QGroupBox("Appearance", page);
+    auto* themeLayout = new QVBoxLayout(themeGroup);
+    auto* darkThemeCheck = new QCheckBox("Dark Theme", themeGroup);
+    QSettings settings("vml", "vml");
+    darkThemeCheck->setChecked(settings.value("darkTheme", true).toBool());
+    connect(darkThemeCheck, &QCheckBox::toggled, this, [this](bool dark) {
+        applyTheme(dark);
+        QSettings s("vml", "vml");
+        s.setValue("darkTheme", dark);
+    });
+    themeLayout->addWidget(darkThemeCheck);
+    layout->addWidget(themeGroup);
 
     layout->addStretch();
     return page;
@@ -287,6 +332,26 @@ void MainWindow::connectSignals() {
 
     connect(m_outputDeviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, &MainWindow::onOutputDeviceChanged);
+
+    // Keyboard shortcuts
+    auto* scEnable = new QShortcut(QKeySequence("Ctrl+E"), this);
+    connect(scEnable, &QShortcut::activated, this, [this]() {
+        m_enableBtn->toggle();
+    });
+    auto* scMonitor = new QShortcut(QKeySequence("Ctrl+M"), this);
+    connect(scMonitor, &QShortcut::activated, this, [this]() {
+        m_monitorBtn->toggle();
+    });
+    auto* scNextProfile = new QShortcut(QKeySequence("Ctrl+Right"), this);
+    connect(scNextProfile, &QShortcut::activated, this, [this]() {
+        int next = m_profileCombo->currentIndex() + 1;
+        if (next < m_profileCombo->count()) m_profileCombo->setCurrentIndex(next);
+    });
+    auto* scPrevProfile = new QShortcut(QKeySequence("Ctrl+Left"), this);
+    connect(scPrevProfile, &QShortcut::activated, this, [this]() {
+        int prev = m_profileCombo->currentIndex() - 1;
+        if (prev >= 0) m_profileCombo->setCurrentIndex(prev);
+    });
 
     // System tray
     m_tray = new SystemTray(this);
@@ -485,6 +550,28 @@ void MainWindow::onVirtualMicNameChanged() {
         m_virtualMicNameEdit->setText(name);
     }
     m_engine.setVirtualMicName(name.toStdString());
+}
+
+void MainWindow::applyTheme(bool dark) {
+    if (dark) {
+        QPalette pal;
+        pal.setColor(QPalette::Window, QColor(0x2b, 0x2b, 0x2b));
+        pal.setColor(QPalette::WindowText, Qt::white);
+        pal.setColor(QPalette::Base, QColor(0x1e, 0x1e, 0x1e));
+        pal.setColor(QPalette::AlternateBase, QColor(0x2b, 0x2b, 0x2b));
+        pal.setColor(QPalette::ToolTipBase, Qt::white);
+        pal.setColor(QPalette::ToolTipText, Qt::white);
+        pal.setColor(QPalette::Text, Qt::white);
+        pal.setColor(QPalette::Button, QColor(0x35, 0x35, 0x35));
+        pal.setColor(QPalette::ButtonText, Qt::white);
+        pal.setColor(QPalette::BrightText, Qt::red);
+        pal.setColor(QPalette::Link, QColor(0x2d, 0x7d, 0x9a));
+        pal.setColor(QPalette::Highlight, QColor(0x2d, 0x7d, 0x9a));
+        pal.setColor(QPalette::HighlightedText, Qt::white);
+        qApp->setPalette(pal);
+    } else {
+        qApp->setPalette(qApp->style()->standardPalette());
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

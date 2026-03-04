@@ -32,6 +32,8 @@ private:
     void moveSelectedDown();
     void updateButtons();
     void addFlowArrow(qreal y);
+    void handleDrop(int fromIndex, int toIndex);
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
     QGraphicsView* m_view;
     QGraphicsScene* m_scene;
