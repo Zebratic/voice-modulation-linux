@@ -488,14 +488,19 @@ QWidget* MainWindow::createEditVoiceTab() {
     splitter->setStretchFactor(1, 2);
     splitter->setStretchFactor(2, 2);
 
-    mainLayout->addWidget(splitter, 1);
+    // Vertical splitter: top (horizontal splitter) | bottom (keyframe timeline)
+    auto* vSplitter = new QSplitter(Qt::Vertical, page);
+    vSplitter->addWidget(splitter);
 
-    // Keyframe timeline (shows all keyframed params on one timeline)
-    m_keyframeTimeline = new KeyframeTimelineWidget(page);
+    m_keyframeTimeline = new KeyframeTimelineWidget(vSplitter);
     m_keyframeTimeline->setModulationManager(&m_engine.modulationManager());
     m_keyframeTimeline->setPipeline(&m_engine.pipeline());
-    m_keyframeTimeline->setMaximumHeight(250);
-    mainLayout->addWidget(m_keyframeTimeline);
+    vSplitter->addWidget(m_keyframeTimeline);
+
+    vSplitter->setStretchFactor(0, 3);
+    vSplitter->setStretchFactor(1, 1);
+
+    mainLayout->addWidget(vSplitter, 1);
 
     return page;
 }

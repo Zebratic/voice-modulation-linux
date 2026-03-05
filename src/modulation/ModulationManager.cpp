@@ -85,6 +85,16 @@ float ModulationManager::currentValue(const std::string& effectId, const std::st
     return 0.f;
 }
 
+float ModulationManager::currentPhase(const std::string& effectId, const std::string& paramId) const {
+    std::lock_guard lock(m_mutex);
+    for (auto& e : m_entries) {
+        auto& cfg = e.modulator->config();
+        if (cfg.effectId == effectId && cfg.paramId == paramId)
+            return e.modulator->currentPhase();
+    }
+    return 0.f;
+}
+
 void ModulationManager::clear() {
     std::lock_guard lock(m_mutex);
     m_entries.clear();

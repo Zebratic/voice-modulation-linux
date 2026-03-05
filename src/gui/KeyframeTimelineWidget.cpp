@@ -25,8 +25,7 @@ const QColor KeyframeTimelineWidget::s_laneColors[] = {
 TimelineLane::TimelineLane(const QString& label, const QColor& color, QWidget* parent)
     : QWidget(parent), m_label(label), m_color(color) {
     setMinimumHeight(60);
-    setMaximumHeight(60);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
 }
 
@@ -68,6 +67,36 @@ int TimelineLane::hitTest(const QPointF& pos) const {
     return -1;
 }
 
+// Evaluate curve value at normalized time t (0-1), matching Modulator::evaluateCurve
+static float evaluateCurveForDisplay(const ModulatorConfig& cfg, float t) {
+    t = std::clamp(t, 0.f, 1.f);
+    switch (cfg.curve) {
+    case ModCurve::Linear:
+        return t;
+    case ModCurve::EaseInOut:
+        return t * t * (3.f - 2.f * t);
+    case ModCurve::Rubberband:
+        return 1.f - std::pow(2.f, -8.f * t);
+    case ModCurve::Keyframe: {
+        const auto& kfs = cfg.keyframes;
+        if (kfs.empty()) return t;
+        if (kfs.size() == 1) return kfs[0].value;
+        if (t <= kfs.front().position) return kfs.front().value;
+        if (t >= kfs.back().position) return kfs.back().value;
+        for (size_t i = 0; i + 1 < kfs.size(); ++i) {
+            if (t >= kfs[i].position && t <= kfs[i + 1].position) {
+                float segLen = kfs[i + 1].position - kfs[i].position;
+                if (segLen <= 0.f) return kfs[i].value;
+                float segT = (t - kfs[i].position) / segLen;
+                return kfs[i].value + (kfs[i + 1].value - kfs[i].value) * segT;
+            }
+        }
+        return kfs.back().value;
+    }
+    }
+    return t;
+}
+
 void TimelineLane::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
@@ -92,24 +121,28 @@ void TimelineLane::paintEvent(QPaintEvent*) {
     p.setPen(QPen(QColor(60, 60, 80), 1));
     p.drawRect(QRectF(margin - 1, margin - 1, w + 2, h + 2));
 
-    // Draw curve
-    const auto& kfs = m_config.keyframes;
-    if (kfs.size() >= 2) {
-        p.setPen(QPen(m_color, 2));
-        for (size_t i = 0; i + 1 < kfs.size(); ++i) {
-            QPointF a = keyframeToWidget(kfs[i]);
-            QPointF b = keyframeToWidget(kfs[i + 1]);
-            p.drawLine(a, b);
-        }
+    // Draw curve by sampling
+    p.setPen(QPen(m_color, 2));
+    int steps = std::max(static_cast<int>(w), 60);
+    QPointF prev;
+    for (int i = 0; i <= steps; ++i) {
+        float t = static_cast<float>(i) / steps;
+        float val = evaluateCurveForDisplay(m_config, t);
+        QPointF pt(margin + t * w, margin + (1.f - val) * h);
+        if (i > 0)
+            p.drawLine(prev, pt);
+        prev = pt;
     }
 
-    // Draw keyframe points
-    for (size_t i = 0; i < kfs.size(); ++i) {
-        QPointF pt = keyframeToWidget(kfs[i]);
-        // Outer ring
-        p.setPen(QPen(Qt::white, 1.5));
-        p.setBrush(static_cast<int>(i) == m_dragIndex ? QColor(255, 200, 50) : m_color);
-        p.drawEllipse(pt, 5, 5);
+    // Draw keyframe points (only for keyframe curves)
+    if (m_config.curve == ModCurve::Keyframe) {
+        const auto& kfs = m_config.keyframes;
+        for (size_t i = 0; i < kfs.size(); ++i) {
+            QPointF pt = keyframeToWidget(kfs[i]);
+            p.setPen(QPen(Qt::white, 1.5));
+            p.setBrush(static_cast<int>(i) == m_dragIndex ? QColor(255, 200, 50) : m_color);
+            p.drawEllipse(pt, 5, 5);
+        }
     }
 
     // Playhead
@@ -128,13 +161,14 @@ void TimelineLane::paintEvent(QPaintEvent*) {
 }
 
 void TimelineLane::mousePressEvent(QMouseEvent* event) {
+    if (m_config.curve != ModCurve::Keyframe) return;
     if (event->button() == Qt::LeftButton)
         m_dragIndex = hitTest(event->position());
     update();
 }
 
 void TimelineLane::mouseMoveEvent(QMouseEvent* event) {
-    if (m_dragIndex < 0) return;
+    if (m_config.curve != ModCurve::Keyframe || m_dragIndex < 0) return;
     Keyframe kf = widgetToKeyframe(event->position());
     // Constrain between neighbors
     if (m_dragIndex > 0)
@@ -154,6 +188,7 @@ void TimelineLane::mouseReleaseEvent(QMouseEvent*) {
 }
 
 void TimelineLane::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (m_config.curve != ModCurve::Keyframe) return;
     int hit = hitTest(event->position());
     if (hit >= 0) {
         if (m_config.keyframes.size() > 2) {
@@ -191,10 +226,12 @@ KeyframeTimelineWidget::KeyframeTimelineWidget(QWidget* parent) : QWidget(parent
     m_lanesLayout = new QVBoxLayout(container);
     m_lanesLayout->setContentsMargins(0, 0, 0, 0);
     m_lanesLayout->setSpacing(2);
-    m_lanesLayout->addStretch();
     m_scrollArea->setWidget(container);
 
     mainLayout->addWidget(m_scrollArea);
+
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setMinimumHeight(80);
 
     m_playheadTimer.setInterval(33); // ~30 fps
     connect(&m_playheadTimer, &QTimer::timeout, this, &KeyframeTimelineWidget::updatePlayhead);
@@ -217,7 +254,7 @@ void KeyframeTimelineWidget::rebuild() {
     int colorIdx = 0;
 
     for (const auto& cfg : configs) {
-        if (cfg.curve != ModCurve::Keyframe || !cfg.active) continue;
+        if (!cfg.active) continue;
 
         // Find the effect/param names for the label
         QString label;
@@ -243,8 +280,7 @@ void KeyframeTimelineWidget::rebuild() {
 
         auto* lane = new TimelineLane(label, color, m_scrollArea->widget());
         lane->setConfig(cfg);
-        // Insert before the stretch
-        m_lanesLayout->insertWidget(m_lanesLayout->count() - 1, lane);
+        m_lanesLayout->addWidget(lane);
         m_lanes.push_back(lane);
 
         connect(lane, &TimelineLane::keyframesChanged,
@@ -260,35 +296,10 @@ void KeyframeTimelineWidget::rebuild() {
 void KeyframeTimelineWidget::updatePlayhead() {
     if (!m_modulationMgr) return;
 
-    // Use the first keyframe modulator's current phase as reference
-    // Each lane shows its own playhead based on its modulator's current value position
-    auto configs = m_modulationMgr->snapshot();
     for (auto* lane : m_lanes) {
         const auto& cfg = lane->config();
-        float currentVal = m_modulationMgr->currentValue(cfg.effectId, cfg.paramId);
-        // Approximate playhead from current value relative to start/end
-        float range = cfg.endValue - cfg.startValue;
-        float norm = (range != 0.f) ? (currentVal - cfg.startValue) / range : 0.f;
-        norm = std::clamp(norm, 0.f, 1.f);
-
-        // Map the normalized value back through keyframes to approximate position
-        const auto& kfs = cfg.keyframes;
-        float pos = norm; // fallback
-        if (kfs.size() >= 2) {
-            // Find where this value falls on the keyframe curve
-            for (size_t i = 0; i + 1 < kfs.size(); ++i) {
-                float v0 = kfs[i].value, v1 = kfs[i + 1].value;
-                if ((norm >= std::min(v0, v1) && norm <= std::max(v0, v1)) ||
-                    i + 2 == kfs.size()) {
-                    float vRange = v1 - v0;
-                    float segT = (vRange != 0.f) ? (norm - v0) / vRange : 0.f;
-                    segT = std::clamp(segT, 0.f, 1.f);
-                    pos = kfs[i].position + segT * (kfs[i + 1].position - kfs[i].position);
-                    break;
-                }
-            }
-        }
-        lane->setPlayheadPosition(pos);
+        float phase = m_modulationMgr->currentPhase(cfg.effectId, cfg.paramId);
+        lane->setPlayheadPosition(std::clamp(phase, 0.f, 1.f));
     }
 }
 

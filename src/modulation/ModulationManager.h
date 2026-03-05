@@ -34,6 +34,9 @@ public:
     // Get current modulated value for display
     float currentValue(const std::string& effectId, const std::string& paramId) const;
 
+    // Get current phase (0-1 normalized time position) for timeline display
+    float currentPhase(const std::string& effectId, const std::string& paramId) const;
+
     void clear();
 
     // Serialization

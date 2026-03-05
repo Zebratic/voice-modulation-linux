@@ -40,6 +40,7 @@ public:
     void setTarget(std::atomic<float>* t) { m_target = t; }
 
     float currentValue() const { return m_currentValue; }
+    float currentPhase() const { return m_phase <= 1.f ? m_phase : 2.f - m_phase; }
 
 private:
     float evaluateCurve(float t) const;
