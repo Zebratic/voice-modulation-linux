@@ -34,6 +34,7 @@ private:
     std::string m_currentFilename;
     bool m_isBuiltin = false;
 
+    QLabel* m_iconLabel = nullptr;
     QLabel* m_nameLabel = nullptr;
     QPushButton* m_renameBtn = nullptr;
     QPushButton* m_activateBtn = nullptr;

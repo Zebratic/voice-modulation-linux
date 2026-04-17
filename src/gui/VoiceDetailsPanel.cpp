@@ -27,6 +27,10 @@ void VoiceDetailsPanel::setupUI() {
     // ── Header: voice icon + name + rename ──────────────────────────────────
     auto* headerRow = new QHBoxLayout();
 
+    m_iconLabel = new QLabel(u8"\U0001F3A4", this);
+    m_iconLabel->setStyleSheet("QLabel { font-size: 18px; }");
+    headerRow->addWidget(m_iconLabel);
+
     m_nameLabel = new QLabel("(No voice selected)", this);
     QFont nameFont = m_nameLabel->font();
     nameFont.setPointSize(14);
