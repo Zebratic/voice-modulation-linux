@@ -53,7 +53,7 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
         size_t avail = inRb.availableRead();
         while (avail > 0) {
             size_t n = inRb.read(buf, std::min(avail, size_t(512)));
-            // Only update toolbar widgets - Edit Voice tab widgets removed to avoid duplication
+            // Only update toolbar widgets
             m_toolbarInputWaveform->pushSamples(buf, static_cast<int>(n));
             avail -= n;
         }
@@ -63,8 +63,9 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
         avail = outRb.availableRead();
         while (avail > 0) {
             size_t n = outRb.read(buf, std::min(avail, size_t(512)));
-            // Only update toolbar widgets
+            // Update toolbar waveform and spectrum widget
             m_toolbarOutputWaveform->pushSamples(buf, static_cast<int>(n));
+            m_spectrumWidget->pushSamples(buf, static_cast<int>(n));
             avail -= n;
         }
         m_toolbarOutputWaveform->setLevel(m_engine.outputLevel());
@@ -427,8 +428,9 @@ QWidget* MainWindow::createEditVoiceTab() {
 
     mainLayout->addLayout(topBar);
 
-    // Note: Waveform and spectrum widgets are displayed in the toolbar
-    // so we don't duplicate them here
+    // Spectrum analyzer (waveforms are in the toolbar)
+    m_spectrumWidget = new SpectrumWidget(page);
+    mainLayout->addWidget(m_spectrumWidget);
 
     // Horizontal split: effect list | pipeline | settings
     auto* splitter = new QSplitter(Qt::Horizontal, page);
