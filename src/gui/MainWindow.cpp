@@ -206,23 +206,29 @@ void MainWindow::deleteVoice(const std::string& filename) {
                 "Built-in voices cannot be deleted.");
             return;
         }
-    } catch (...) {}
 
-    auto reply = QMessageBox::question(this, "Delete Voice",
-        "Are you sure you want to delete this voice?",
-        QMessageBox::Yes | QMessageBox::No);
-    if (reply != QMessageBox::Yes) return;
+        auto reply = QMessageBox::question(this, "Delete Voice",
+            QString("Are you sure you want to permanently delete \"%1\"?\n\n"
+                    "This voice profile will be deleted and cannot be recovered.")
+                .arg(QString::fromStdString(profile.name)),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply != QMessageBox::Yes) return;
 
-    if (filename == m_activeVoiceFilename) {
-        m_engine.modulationManager().clear();
-        m_engine.pipeline().clear();
-        m_pipelineWidget->rebuild();
-        m_settingsPanel->clearEffect();
-        m_activeVoiceFilename.clear();
+        if (filename == m_activeVoiceFilename) {
+            m_engine.modulationManager().clear();
+            m_engine.pipeline().clear();
+            m_pipelineWidget->rebuild();
+            m_settingsPanel->clearEffect();
+            m_activeVoiceFilename.clear();
+        }
+
+        m_profileManager.deleteProfile(filename);
+        m_folderSidebar->refresh();
+        m_voiceDetailsPanel->clear();
+        rebuildVoiceGrid();
+    } catch (const std::exception& e) {
+        QMessageBox::warning(this, "Delete Error", e.what());
     }
-
-    m_profileManager.deleteProfile(filename);
-    rebuildVoiceGrid();
 }
 
 void MainWindow::exportVoice(const std::string& filename) {
