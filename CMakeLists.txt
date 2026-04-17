@@ -34,6 +34,7 @@ set(VML_SOURCES
     src/effects/EffectRegistry.cpp
     src/effects/GainEffect.cpp
     src/effects/NoiseGateEffect.cpp
+    src/effects/NoiseSuppressionEffect.cpp
     src/effects/EchoEffect.cpp
     src/effects/PitchShiftEffect.cpp
     src/effects/ReverbEffect.cpp
