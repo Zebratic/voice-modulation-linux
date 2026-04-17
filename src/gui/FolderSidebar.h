@@ -19,6 +19,7 @@ public:
     ~FolderSidebar() override = default;
 
     void refresh();
+    QString getSelectedFolderId() const;
 
 signals:
     void voiceSelected(const std::string& filename);

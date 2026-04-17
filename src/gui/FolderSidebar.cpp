@@ -95,6 +95,16 @@ void FolderSidebar::refresh() {
     populateTree();
 }
 
+QString FolderSidebar::getSelectedFolderId() const {
+    QTreeWidgetItem* item = m_tree->currentItem();
+    if (!item) return QString();
+    QString type = item->data(0, Qt::UserRole + 1).toString();
+    if (type == QStringLiteral("folder")) {
+        return item->data(0, Qt::UserRole).toString();
+    }
+    return QString();
+}
+
 void FolderSidebar::populateTree() {
     FolderStructure structure = m_profileManager.loadFolderStructure();
 

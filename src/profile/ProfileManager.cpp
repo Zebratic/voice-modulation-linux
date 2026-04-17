@@ -1,4 +1,5 @@
 #include "profile/ProfileManager.h"
+#include "profile/ZipWriter.h"
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
@@ -705,4 +706,153 @@ int ProfileManager::getFolderDepth(const std::string& folderId) const {
     }
 
     return depth;
+}
+
+// =============================================================================
+// ZIP export utilities
+// =============================================================================
+
+namespace {
+// Encode a filename path relative to the voice root.
+// e.g. "My Folder/Subfolder/my-voice.json"
+std::string makeVoicePath(const std::vector<std::string>& folderNames, const std::string& filename) {
+    std::string result;
+    for (const auto& f : folderNames) {
+        result += f;
+        result += '/';
+    }
+    result += filename;
+    return result;
+}
+
+// Recursively collect all voice filenames under folderId (including subfolders).
+void collectVoiceFiles(const std::string& folderId,
+                       const std::vector<VoiceFolder>& folders,
+                       const std::map<std::string, std::string>& assignments,
+                       std::vector<std::string>& out) {
+    for (const auto& [filename, fid] : assignments) {
+        if (fid == folderId) {
+            out.push_back(filename);
+        }
+    }
+    // Recurse into subfolders
+    for (const auto& f : folders) {
+        if (f.parentId == folderId) {
+            collectVoiceFiles(f.id, folders, assignments, out);
+        }
+    }
+}
+
+// Build a list of (folderId, folderName) ancestry for a given folderId,
+// from root down to the folder itself.
+std::vector<std::string> buildFolderPath(const std::string& folderId,
+                                         const std::vector<VoiceFolder>& folders) {
+    std::vector<std::string> parts;
+    std::string current = folderId;
+    while (!current.empty()) {
+        auto it = std::find_if(folders.begin(), folders.end(),
+                               [&](const VoiceFolder& f) { return f.id == current; });
+        if (it == folders.end()) break;
+        parts.push_back(it->name);
+        current = it->parentId;
+    }
+    std::reverse(parts.begin(), parts.end());
+    return parts;
+}
+} // anonymous namespace
+
+void ProfileManager::exportFolderAsZip(const std::string& folderId,
+                                       const fs::path& destPath) const {
+    FolderStructure structure = loadFolderStructure();
+    const auto& folders = structure.folders;
+    const auto& assignments = structure.voiceAssignments;
+
+    // Find folder name for the root of this export
+    std::string folderName = "Exported Folder";
+    auto rootIt = std::find_if(folders.begin(), folders.end(),
+                               [&](const VoiceFolder& f) { return f.id == folderId; });
+    if (rootIt != folders.end()) {
+        folderName = rootIt->name;
+    }
+
+    ZipWriter writer(destPath.string());
+    if (!writer.isOk()) {
+        throw std::runtime_error("Failed to create ZIP file: " + destPath.string());
+    }
+
+    // Collect all voice filenames under this folder (recursively)
+    std::vector<std::string> voiceFiles;
+    collectVoiceFiles(folderId, folders, assignments, voiceFiles);
+
+    // Add manifest
+    json manifest;
+    manifest["type"] = "vml-folder-zip";
+    manifest["version"] = 1;
+    manifest["name"] = folderName;
+    manifest["profileCount"] = static_cast<int>(voiceFiles.size());
+    writer.add("manifest.json", manifest.dump(2));
+
+    // Export each voice
+    for (const auto& filename : voiceFiles) {
+        try {
+            auto profile = loadProfile(filename);
+            profile.data.erase("builtin");
+            profile.data.erase("folderId");
+
+            // Build the path inside the ZIP using the folder ancestry
+            std::vector<std::string> folderPath = buildFolderPath(folderId, folders);
+            std::string zipPath = makeVoicePath(folderPath, filename);
+            writer.add(zipPath, profile.data.dump(2));
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: skipping voice '" << filename
+                      << "' during ZIP export: " << e.what() << '\n';
+        }
+    }
+
+    if (!writer.finalize()) {
+        throw std::runtime_error("Failed to write ZIP file: " + destPath.string());
+    }
+}
+
+void ProfileManager::exportAllAsZip(const fs::path& destPath) const {
+    FolderStructure structure = loadFolderStructure();
+    const auto& folders = structure.folders;
+    const auto& assignments = structure.voiceAssignments;
+
+    ZipWriter writer(destPath.string());
+    if (!writer.isOk()) {
+        throw std::runtime_error("Failed to create ZIP file: " + destPath.string());
+    }
+
+    // Add manifest
+    json manifest;
+    manifest["type"] = "vml-all-voices-zip";
+    manifest["version"] = 1;
+    manifest["profileCount"] = static_cast<int>(assignments.size());
+    writer.add("manifest.json", manifest.dump(2));
+
+    // Export every assigned voice, grouping by folder
+    for (const auto& [filename, folderId] : assignments) {
+        try {
+            auto profile = loadProfile(filename);
+            profile.data.erase("builtin");
+            profile.data.erase("folderId");
+
+            std::string zipPath;
+            if (!folderId.empty()) {
+                std::vector<std::string> folderPath = buildFolderPath(folderId, folders);
+                zipPath = makeVoicePath(folderPath, filename);
+            } else {
+                zipPath = filename;
+            }
+            writer.add(zipPath, profile.data.dump(2));
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: skipping voice '" << filename
+                      << "' during ZIP export: " << e.what() << '\n';
+        }
+    }
+
+    if (!writer.finalize()) {
+        throw std::runtime_error("Failed to write ZIP file: " + destPath.string());
+    }
 }

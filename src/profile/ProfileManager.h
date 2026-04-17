@@ -69,6 +69,11 @@ public:
     void exportFolder(const std::string& folderId, const std::filesystem::path& destPath) const;
     std::string importFolder(const std::filesystem::path& srcPath, const std::string& parentFolderId);
 
+    // ZIP export — exports all voices under a voice folder (recursively) as a ZIP file
+    void exportFolderAsZip(const std::string& folderId, const std::filesystem::path& destPath) const;
+    // ZIP export — exports all voices as a ZIP file
+    void exportAllAsZip(const std::filesystem::path& destPath) const;
+
     // Update profile's folder
     void setProfileFolder(const std::string& filename, const std::string& folderId);
 

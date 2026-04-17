@@ -11,6 +11,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 # Dependencies
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(ZLIB REQUIRED)
 find_package(PipeWire REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SPA REQUIRED libspa-0.2)
@@ -75,6 +76,7 @@ target_link_libraries(vml PRIVATE
     Qt6::Widgets
     ${PIPEWIRE_LIBRARIES}
     nlohmann_json::nlohmann_json
+    ZLIB::ZLIB
 )
 
 target_compile_options(vml PRIVATE -Wall -Wextra -O2)
@@ -104,11 +106,11 @@ if(BUILD_TESTS)
 
     add_executable(test_profile_manager tests/test_profile_manager.cpp src/profile/ProfileManager.cpp)
     target_include_directories(test_profile_manager PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_profile_manager PRIVATE Qt6::Test nlohmann_json::nlohmann_json)
+    target_link_libraries(test_profile_manager PRIVATE Qt6::Test nlohmann_json::nlohmann_json ZLIB::ZLIB)
     add_test(NAME ProfileManager COMMAND test_profile_manager)
 
     add_executable(test_folder_structure tests/test_folder_structure.cpp src/profile/ProfileManager.cpp)
     target_include_directories(test_folder_structure PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_folder_structure PRIVATE Qt6::Test nlohmann_json::nlohmann_json)
+    target_link_libraries(test_folder_structure PRIVATE Qt6::Test nlohmann_json::nlohmann_json ZLIB::ZLIB)
     add_test(NAME FolderStructure COMMAND test_folder_structure)
 endif()

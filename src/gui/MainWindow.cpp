@@ -264,9 +264,42 @@ void MainWindow::renameVoice(const std::string& filename) {
 }
 
 void MainWindow::exportCurrentFolder() {
-    // Placeholder: full implementation in Task 6
-    QMessageBox::information(this, "Export Folder",
-        "Folder export is not yet implemented. Use 'Export' on individual voices for now.");
+    QString folderId = m_folderSidebar->getSelectedFolderId();
+
+    if (folderId.isEmpty()) {
+        QMessageBox::information(this, "Export Folder",
+            "Please select a folder in the sidebar to export.");
+        return;
+    }
+
+    // Derive a suggested filename from the folder name
+    FolderStructure structure = m_profileManager.loadFolderStructure();
+    std::string folderName;
+    for (const auto& f : structure.folders) {
+        if (f.id == folderId.toStdString()) {
+            folderName = f.name;
+            break;
+        }
+    }
+    if (folderName.empty())
+        folderName = "Exported Folder";
+    std::string suggested = folderName;
+    std::replace(suggested.begin(), suggested.end(), ' ', '-');
+    suggested = suggested + ".zip";
+
+    QString destPath = QFileDialog::getSaveFileName(this, "Export Folder as ZIP",
+        QDir::homePath() + "/" + QString::fromStdString(suggested),
+        "ZIP Archive (*.zip)");
+    if (destPath.isEmpty())
+        return;
+
+    try {
+        m_profileManager.exportFolderAsZip(folderId.toStdString(), destPath.toStdString());
+        QMessageBox::information(this, "Export Complete",
+            QString("Folder exported successfully to:\n%1").arg(destPath));
+    } catch (const std::exception& e) {
+        QMessageBox::warning(this, "Export Error", e.what());
+    }
 }
 
 void MainWindow::importVoice() {
