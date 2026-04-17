@@ -52,7 +52,13 @@ void FolderSidebar::setupUI() {
             this, [this](const QPoint& pos) {
                 QTreeWidgetItem* item = m_tree->itemAt(pos);
                 if (!item) return;
-                showFolderContextMenu(item, m_tree->viewport()->mapToGlobal(pos));
+                QString type = item->data(0, Qt::UserRole + 1).toString();
+                if (type == QStringLiteral("voice")) {
+                    emit voiceSelected(item->data(0, Qt::UserRole).toString().toStdString());
+                    showVoiceContextMenu(item, m_tree->viewport()->mapToGlobal(pos));
+                } else {
+                    showFolderContextMenu(item, m_tree->viewport()->mapToGlobal(pos));
+                }
             });
 }
 
@@ -319,6 +325,94 @@ void FolderSidebar::showFolderContextMenu(QTreeWidgetItem* item, const QPoint& g
         menu.addSeparator();
         menu.addAction("Delete", this, [this, item]() {
             onDeleteFolder(item);
+        });
+    }
+
+    if (!menu.isEmpty())
+        menu.exec(globalPos);
+}
+
+void FolderSidebar::showVoiceContextMenu(QTreeWidgetItem* item, const QPoint& globalPos) {
+    QString filename = item->data(0, Qt::UserRole).toString();
+    bool builtin = item->data(0, Qt::UserRole + 2).toBool();
+
+    QMenu menu;
+
+    // Build "Move to..." submenu listing all eligible folders
+    QMenu* moveMenu = menu.addMenu("Move to...");
+    FolderStructure structure = m_profileManager.loadFolderStructure();
+
+    bool hasDestination = false;
+    for (const auto& folder : structure.folders) {
+        if (folder.id == BuiltinFolderId)
+            continue;
+        if (m_profileManager.getFolderDepth(folder.id) >= MaxFolderDepth)
+            continue;
+
+        // Skip the folder the voice is already in
+        auto it = structure.voiceAssignments.find(filename.toStdString());
+        if (it != structure.voiceAssignments.end() && it->second == folder.id)
+            continue;
+
+        // Build a readable path label
+        std::vector<std::string> pathParts;
+        std::string current = folder.id;
+        while (!current.empty()) {
+            auto fit = std::find_if(structure.folders.begin(), structure.folders.end(),
+                                    [&](const VoiceFolder& f) { return f.id == current; });
+            if (fit == structure.folders.end())
+                break;
+            pathParts.insert(pathParts.begin(), fit->name);
+            current = fit->parentId;
+        }
+        QString pathLabel = QString::fromStdString(
+            [&]() {
+                std::string r;
+                for (size_t i = 0; i < pathParts.size(); ++i) {
+                    if (i > 0) r += " / ";
+                    r += pathParts[i];
+                }
+                return r;
+            }()
+        );
+
+        moveMenu->addAction(pathLabel, this, [this, filename, folder]() {
+            m_profileManager.moveVoiceToFolder(filename.toStdString(), folder.id);
+            refresh();
+        });
+        hasDestination = true;
+    }
+
+    // Offer "Root" as a destination (move to root = unfiled)
+    auto it = structure.voiceAssignments.find(filename.toStdString());
+    if (it != structure.voiceAssignments.end() && !it->second.empty()) {
+        moveMenu->addAction("(Root)", this, [this, filename]() {
+            m_profileManager.moveVoiceToFolder(filename.toStdString(), "");
+            refresh();
+        });
+        hasDestination = true;
+    }
+
+    if (!hasDestination)
+        moveMenu->setEnabled(false);
+
+    menu.addSeparator();
+
+    // Delete option — only for non-builtin voices
+    if (!builtin) {
+        menu.addAction("Delete", this, [this, filename]() {
+            QMessageBox::StandardButton reply = QMessageBox::question(
+                this, "Delete Voice",
+                "Delete this voice permanently?",
+                QMessageBox::Yes | QMessageBox::No);
+            if (reply != QMessageBox::Yes)
+                return;
+            m_profileManager.deleteProfile(filename.toStdString());
+            // Remove from folder structure assignments
+            FolderStructure structure = m_profileManager.loadFolderStructure();
+            structure.voiceAssignments.erase(filename.toStdString());
+            m_profileManager.saveFolderStructure(structure);
+            refresh();
         });
     }
 
