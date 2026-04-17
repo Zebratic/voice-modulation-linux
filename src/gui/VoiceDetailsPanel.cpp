@@ -14,6 +14,7 @@
 VoiceDetailsPanel::VoiceDetailsPanel(ProfileManager& profileManager, QWidget* parent)
     : QWidget(parent)
     , m_profileManager(profileManager)
+    , m_activeVoiceFilename()
 {
     setupUI();
     clear();
@@ -125,12 +126,15 @@ void VoiceDetailsPanel::setupUI() {
 
 void VoiceDetailsPanel::clear() {
     m_currentFilename.clear();
+    m_activeVoiceFilename.clear();
     m_isBuiltin = false;
     m_nameLabel->setText("(No voice selected)");
     m_renameBtn->setVisible(false);
     m_deleteBtn->setVisible(false);
 
+    m_activateBtn->setText("Activate");
     m_activateBtn->setEnabled(false);
+    m_activateBtn->setStyleSheet("");
     m_editBtn->setEnabled(false);
     m_exportBtn->setEnabled(false);
 
@@ -163,6 +167,24 @@ void VoiceDetailsPanel::setVoice(const std::string& filename) {
     m_activateBtn->setEnabled(true);
     m_editBtn->setEnabled(true);
     m_exportBtn->setEnabled(true);
+
+    // Update activate button state
+    bool isActive = (!m_activeVoiceFilename.empty()
+                     && m_currentFilename == m_activeVoiceFilename);
+    if (isActive) {
+        m_activateBtn->setText("Active");
+        m_activateBtn->setStyleSheet("QPushButton { background-color: #2d7d2d; color: white; }");
+    } else {
+        m_activateBtn->setText("Activate");
+        m_activateBtn->setStyleSheet("");
+    }
+}
+
+void VoiceDetailsPanel::setActiveVoiceFilename(const std::string& filename) {
+    m_activeVoiceFilename = filename;
+    // Refresh the activate button if a voice is currently shown
+    if (!m_currentFilename.empty())
+        setVoice(m_currentFilename);
 }
 
 void VoiceDetailsPanel::populateEffects(const nlohmann::json& profileData) {

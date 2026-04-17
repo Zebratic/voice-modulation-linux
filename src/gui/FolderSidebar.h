@@ -24,6 +24,7 @@ public:
 signals:
     void voiceSelected(const std::string& filename);
     void voiceDoubleClicked(const std::string& filename);
+    void voiceDeselected();
 
 public slots:
     void onNewFolderClicked();

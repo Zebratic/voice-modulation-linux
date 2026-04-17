@@ -17,6 +17,7 @@ public:
     ~VoiceDetailsPanel() override = default;
 
     void setVoice(const std::string& filename);
+    void setActiveVoiceFilename(const std::string& filename);
     void clear();
 
 signals:
@@ -32,6 +33,7 @@ private:
 
     ProfileManager& m_profileManager;
     std::string m_currentFilename;
+    std::string m_activeVoiceFilename;
     bool m_isBuiltin = false;
 
     QLabel* m_iconLabel = nullptr;

@@ -214,13 +214,23 @@ void FolderSidebar::buildFolderItems(QTreeWidgetItem* parentItem, const std::str
 }
 
 void FolderSidebar::onNewFolderClicked() {
+    // Root-level folders are at depth 0; depth 5 means 5 levels deep (0-indexed).
+    // MaxFolderDepth is the exclusive upper bound.
+    FolderStructure structure = m_profileManager.loadFolderStructure();
+    int rootDepth = -1; // depth of the virtual "All Voices" node
+    if (rootDepth >= MaxFolderDepth) {
+        QMessageBox::warning(this, "Depth Limit",
+            QString("Folders can only be nested up to %1 levels deep.\n"
+                    "Create a subfolder inside an existing folder to add more levels.")
+                .arg(MaxFolderDepth));
+        return;
+    }
+
     bool ok = false;
     QString name = QInputDialog::getText(this, "New Folder", "Folder name:",
                                           QLineEdit::Normal, "", &ok);
     if (!ok || name.trimmed().isEmpty())
         return;
-
-    FolderStructure structure = m_profileManager.loadFolderStructure();
 
     VoiceFolder newFolder;
     newFolder.id = ProfileManager::generateFolderId();
@@ -475,11 +485,12 @@ void FolderSidebar::onTreeItemDoubleClicked(QTreeWidgetItem* item, int column) {
 void FolderSidebar::onTreeItemClicked(QTreeWidgetItem* item, int column) {
     Q_UNUSED(column);
     QString type = item->data(0, Qt::UserRole + 1).toString();
-    if (type != QStringLiteral("voice"))
-        return;
-
-    QString filename = item->data(0, Qt::UserRole).toString();
-    emit voiceSelected(filename.toStdString());
+    if (type == QStringLiteral("voice")) {
+        QString filename = item->data(0, Qt::UserRole).toString();
+        emit voiceSelected(filename.toStdString());
+    } else {
+        emit voiceDeselected();
+    }
 }
 
 void FolderSidebar::dragEnterEvent(QDragEnterEvent* event) {

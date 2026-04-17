@@ -144,6 +144,8 @@ QWidget* MainWindow::createVoicesTab() {
     // Connect sidebar signals to details panel
     connect(m_folderSidebar, &FolderSidebar::voiceSelected,
             m_voiceDetailsPanel, &VoiceDetailsPanel::setVoice);
+    connect(m_folderSidebar, &FolderSidebar::voiceDeselected,
+            m_voiceDetailsPanel, &VoiceDetailsPanel::clear);
     connect(m_folderSidebar, &FolderSidebar::voiceDoubleClicked,
             this, &MainWindow::editVoice);
 
@@ -173,11 +175,16 @@ void MainWindow::rebuildVoiceGrid() {
     for (auto& p : profiles)
         names << QString::fromStdString(p.name);
     if (m_tray) m_tray->setProfiles(names);
+
+    // Refresh the active voice in the details panel so the "Active" button stays correct
+    if (m_voiceDetailsPanel && !m_activeVoiceFilename.empty())
+        m_voiceDetailsPanel->setActiveVoiceFilename(m_activeVoiceFilename);
 }
 
 void MainWindow::activateVoice(const std::string& filename) {
     m_activeVoiceFilename = filename;
     applyProfile(filename);
+    m_voiceDetailsPanel->setActiveVoiceFilename(filename);
     rebuildVoiceGrid();
 }
 
@@ -220,6 +227,7 @@ void MainWindow::deleteVoice(const std::string& filename) {
             m_pipelineWidget->rebuild();
             m_settingsPanel->clearEffect();
             m_activeVoiceFilename.clear();
+            m_voiceDetailsPanel->setActiveVoiceFilename({});
         }
 
         m_profileManager.deleteProfile(filename);
