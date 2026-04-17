@@ -98,6 +98,7 @@ QWidget* MainWindow::createVoicesTab() {
 
     // Left: folder sidebar (fixed 280px)
     m_folderSidebar = new FolderSidebar(m_profileManager, page);
+    m_folderSidebar->setFixedWidth(280);
     layout->addWidget(m_folderSidebar);
 
     // Vertical divider
