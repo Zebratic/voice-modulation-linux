@@ -20,6 +20,8 @@ class WaveformWidget;
 class SpectrumWidget;
 class KeyframeTimelineWidget;
 class SystemTray;
+class FolderSidebar;
+class VoiceDetailsPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -44,6 +46,8 @@ private:
     void editVoice(const std::string& filename);
     void deleteVoice(const std::string& filename);
     void exportVoice(const std::string& filename);
+    void renameVoice(const std::string& filename);
+    void exportCurrentFolder();
     void importVoice();
     void createNewVoice();
     void saveEditedVoice();
@@ -59,6 +63,10 @@ private:
     void applyProfile(const std::string& filename);
     void savePipelineToProfile(const std::string& name, const std::string& filename);
 
+    // Settings persistence
+    void loadSettings();
+    void saveSettings();
+
     // Clip recorder
     void onRecordClicked();
     void updateRecordingState();
@@ -73,9 +81,8 @@ private:
     QTabWidget* m_tabWidget;
 
     // Voices tab
-    QScrollArea* m_voiceScrollArea;
-    QWidget* m_voiceGridWidget;
-    QGridLayout* m_voiceGridLayout;
+    FolderSidebar* m_folderSidebar = nullptr;
+    VoiceDetailsPanel* m_voiceDetailsPanel = nullptr;
     std::string m_activeVoiceFilename;
 
     // Edit Voice tab
@@ -96,12 +103,15 @@ private:
 
     // Settings tab
     QLineEdit* m_virtualMicNameEdit;
+    QCheckBox* m_muteMicIfDisabledCheck;
 
     // Toolbar
     QPushButton* m_enableBtn;
     QPushButton* m_monitorBtn;
     QPushButton* m_recordBtn;
     QPushButton* m_playbackBtn;
+    WaveformWidget* m_toolbarInputWaveform;
+    WaveformWidget* m_toolbarOutputWaveform;
     QTimer m_recordTimer;
 
     SystemTray* m_tray = nullptr;

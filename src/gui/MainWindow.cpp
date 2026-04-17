@@ -7,6 +7,8 @@
 #include "gui/SpectrumWidget.h"
 #include "gui/KeyframeTimelineWidget.h"
 #include "gui/SystemTray.h"
+#include "gui/FolderSidebar.h"
+#include "gui/VoiceDetailsPanel.h"
 #include "effects/EffectRegistry.h"
 #include "audio/ClipRecorder.h"
 #include <QToolBar>
@@ -37,6 +39,7 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
     setMinimumSize(900, 600);
     setupUI();
     setupToolbar();
+    loadSettings();  // Load saved settings (must be after setupToolbar)
     connectSignals();
     refreshInputDevices();
     refreshOutputDevices();
@@ -49,19 +52,23 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
         while (avail > 0) {
             size_t n = inRb.read(buf, std::min(avail, size_t(512)));
             m_inputWaveform->pushSamples(buf, static_cast<int>(n));
+            m_toolbarInputWaveform->pushSamples(buf, static_cast<int>(n));
             avail -= n;
         }
         m_inputWaveform->setLevel(m_engine.inputLevel());
+        m_toolbarInputWaveform->setLevel(m_engine.inputLevel());
 
         auto& outRb = m_engine.outputWaveform();
         avail = outRb.availableRead();
         while (avail > 0) {
             size_t n = outRb.read(buf, std::min(avail, size_t(512)));
             m_outputWaveform->pushSamples(buf, static_cast<int>(n));
+            m_toolbarOutputWaveform->pushSamples(buf, static_cast<int>(n));
             m_spectrumWidget->pushSamples(buf, static_cast<int>(n));
             avail -= n;
         }
         m_outputWaveform->setLevel(m_engine.outputLevel());
+        m_toolbarOutputWaveform->setLevel(m_engine.outputLevel());
     });
     m_meterTimer.start();
 }
@@ -80,187 +87,87 @@ void MainWindow::setupUI() {
 }
 
 // ---------------------------------------------------------------------------
-// Voices Tab — grid of voice cards
+// Voices Tab — master-detail layout with sidebar and details panel
 // ---------------------------------------------------------------------------
 
 QWidget* MainWindow::createVoicesTab() {
     auto* page = new QWidget();
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(8, 8, 8, 8);
+    auto* layout = new QHBoxLayout(page);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(0);
 
-    // Top row: New Voice, Import
+    // Left: folder sidebar (fixed 280px)
+    m_folderSidebar = new FolderSidebar(m_profileManager, page);
+    layout->addWidget(m_folderSidebar);
+
+    // Vertical divider
+    auto* divider = new QFrame(page);
+    divider->setFrameShape(QFrame::VLine);
+    divider->setStyleSheet("QFrame { background-color: #444; }");
+    layout->addWidget(divider);
+
+    // Right: details panel area
+    auto* rightWidget = new QWidget(page);
+    auto* rightLayout = new QVBoxLayout(rightWidget);
+    rightLayout->setContentsMargins(8, 8, 8, 8);
+    rightLayout->setSpacing(8);
+
+    // Top button row
     auto* topRow = new QHBoxLayout();
-    auto* newBtn = new QPushButton("+ New Voice", page);
+    topRow->setSpacing(8);
+
+    auto* newBtn = new QPushButton("+ New Voice", rightWidget);
     newBtn->setFixedHeight(32);
     connect(newBtn, &QPushButton::clicked, this, &MainWindow::createNewVoice);
     topRow->addWidget(newBtn);
 
-    auto* importBtn = new QPushButton("Import Voice", page);
+    auto* importBtn = new QPushButton("Import Voice", rightWidget);
     importBtn->setFixedHeight(32);
     connect(importBtn, &QPushButton::clicked, this, &MainWindow::importVoice);
     topRow->addWidget(importBtn);
 
+    auto* exportFolderBtn = new QPushButton("Export Folder", rightWidget);
+    exportFolderBtn->setFixedHeight(32);
+    connect(exportFolderBtn, &QPushButton::clicked, this, &MainWindow::exportCurrentFolder);
+    topRow->addWidget(exportFolderBtn);
+
     topRow->addStretch();
-    layout->addLayout(topRow);
+    rightLayout->addLayout(topRow);
 
-    // Scrollable grid of voice cards
-    m_voiceScrollArea = new QScrollArea(page);
-    m_voiceScrollArea->setWidgetResizable(true);
-    m_voiceScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_voiceScrollArea->setFrameShape(QFrame::NoFrame);
+    // Voice details panel (fills remaining space)
+    m_voiceDetailsPanel = new VoiceDetailsPanel(m_profileManager, rightWidget);
+    rightLayout->addWidget(m_voiceDetailsPanel, 1);
 
-    m_voiceGridWidget = new QWidget();
-    m_voiceGridLayout = new QGridLayout(m_voiceGridWidget);
-    m_voiceGridLayout->setSpacing(10);
-    m_voiceGridLayout->setContentsMargins(4, 4, 4, 4);
+    layout->addWidget(rightWidget, 1);
 
-    m_voiceScrollArea->setWidget(m_voiceGridWidget);
-    layout->addWidget(m_voiceScrollArea, 1);
+    // Connect sidebar signals to details panel
+    connect(m_folderSidebar, &FolderSidebar::voiceSelected,
+            m_voiceDetailsPanel, &VoiceDetailsPanel::setVoice);
+    connect(m_folderSidebar, &FolderSidebar::voiceDoubleClicked,
+            this, &MainWindow::editVoice);
 
-    rebuildVoiceGrid();
+    // Connect details panel signals to MainWindow slots
+    connect(m_voiceDetailsPanel, &VoiceDetailsPanel::activateRequested,
+            this, &MainWindow::activateVoice);
+    connect(m_voiceDetailsPanel, &VoiceDetailsPanel::editRequested,
+            this, &MainWindow::editVoice);
+    connect(m_voiceDetailsPanel, &VoiceDetailsPanel::exportRequested,
+            this, &MainWindow::exportVoice);
+    connect(m_voiceDetailsPanel, &VoiceDetailsPanel::deleteRequested,
+            this, &MainWindow::deleteVoice);
+    connect(m_voiceDetailsPanel, &VoiceDetailsPanel::renameRequested,
+            this, &MainWindow::renameVoice);
+
     return page;
 }
 
 void MainWindow::rebuildVoiceGrid() {
-    // Clear existing cards
-    QLayoutItem* item;
-    while ((item = m_voiceGridLayout->takeAt(0)) != nullptr) {
-        if (item->widget()) item->widget()->deleteLater();
-        delete item;
-    }
-
-    auto profiles = m_profileManager.listProfiles();
-    int cols = 3;
-    int row = 0, col = 0;
-
-    for (auto& profile : profiles) {
-        bool isActive = (profile.filename == m_activeVoiceFilename);
-
-        // Card frame
-        auto* card = new QFrame(m_voiceGridWidget);
-        card->setFrameShape(QFrame::StyledPanel);
-        card->setMinimumSize(220, 120);
-        card->setMaximumHeight(140);
-        card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-
-        if (isActive) {
-            card->setStyleSheet(
-                "QFrame { background-color: #1a3a2a; border: 2px solid #2d7d2d; border-radius: 8px; }"
-                "QFrame:hover { background-color: #1f4530; }");
-        } else {
-            card->setStyleSheet(
-                "QFrame { background-color: #252535; border: 1px solid #444; border-radius: 8px; }"
-                "QFrame:hover { background-color: #2a2a40; border-color: #666; }");
-        }
-
-        auto* cardLayout = new QVBoxLayout(card);
-        cardLayout->setContentsMargins(12, 10, 12, 10);
-        cardLayout->setSpacing(6);
-
-        // Top row: name + tag
-        auto* headerRow = new QHBoxLayout();
-        auto* nameLabel = new QLabel(QString::fromStdString(profile.name), card);
-        QFont nameFont = nameLabel->font();
-        nameFont.setPointSize(12);
-        nameFont.setBold(true);
-        nameLabel->setFont(nameFont);
-        headerRow->addWidget(nameLabel);
-
-        headerRow->addStretch();
-
-        // Tag
-        auto* tag = new QLabel(profile.builtin ? "Built-in" : "Custom", card);
-        QFont tagFont = tag->font();
-        tagFont.setPixelSize(10);
-        tag->setFont(tagFont);
-        if (profile.builtin) {
-            tag->setStyleSheet("QLabel { color: #7da8c9; background-color: #1a2a3a; border-radius: 4px; padding: 2px 6px; }");
-        } else {
-            tag->setStyleSheet("QLabel { color: #c9a87d; background-color: #3a2a1a; border-radius: 4px; padding: 2px 6px; }");
-        }
-        headerRow->addWidget(tag);
-
-        if (isActive) {
-            auto* activeLabel = new QLabel("ACTIVE", card);
-            QFont af = activeLabel->font();
-            af.setPixelSize(10);
-            af.setBold(true);
-            activeLabel->setFont(af);
-            activeLabel->setStyleSheet("QLabel { color: #2d7d2d; padding: 2px 6px; }");
-            headerRow->addWidget(activeLabel);
-        }
-
-        cardLayout->addLayout(headerRow);
-
-        // Effect count summary
-        int effectCount = 0;
-        if (profile.data.contains("effects") && profile.data["effects"].is_array())
-            effectCount = static_cast<int>(profile.data["effects"].size());
-        auto* summaryLabel = new QLabel(QString("%1 effect%2").arg(effectCount).arg(effectCount != 1 ? "s" : ""), card);
-        summaryLabel->setStyleSheet("QLabel { color: #888; }");
-        QFont sf = summaryLabel->font();
-        sf.setPixelSize(11);
-        summaryLabel->setFont(sf);
-        cardLayout->addWidget(summaryLabel);
-
-        cardLayout->addStretch();
-
-        // Button row
-        auto* btnRow = new QHBoxLayout();
-
-        auto* activateBtn = new QPushButton(isActive ? "Active" : "Activate", card);
-        activateBtn->setFixedHeight(26);
-        activateBtn->setEnabled(!isActive);
-        if (isActive) {
-            activateBtn->setStyleSheet("QPushButton { background-color: #2d7d2d; color: white; border-radius: 4px; }");
-        }
-        std::string fn = profile.filename;
-        connect(activateBtn, &QPushButton::clicked, this, [this, fn]() {
-            activateVoice(fn);
-        });
-        btnRow->addWidget(activateBtn);
-
-        auto* editBtn = new QPushButton("Edit", card);
-        editBtn->setFixedHeight(26);
-        connect(editBtn, &QPushButton::clicked, this, [this, fn]() {
-            editVoice(fn);
-        });
-        btnRow->addWidget(editBtn);
-
-        auto* exportBtn = new QPushButton("Export", card);
-        exportBtn->setFixedHeight(26);
-        connect(exportBtn, &QPushButton::clicked, this, [this, fn]() {
-            exportVoice(fn);
-        });
-        btnRow->addWidget(exportBtn);
-
-        if (!profile.builtin) {
-            auto* deleteBtn = new QPushButton("Delete", card);
-            deleteBtn->setFixedHeight(26);
-            deleteBtn->setStyleSheet("QPushButton { color: #c44; }");
-            connect(deleteBtn, &QPushButton::clicked, this, [this, fn]() {
-                deleteVoice(fn);
-            });
-            btnRow->addWidget(deleteBtn);
-        }
-
-        cardLayout->addLayout(btnRow);
-
-        m_voiceGridLayout->addWidget(card, row, col);
-        col++;
-        if (col >= cols) {
-            col = 0;
-            row++;
-        }
-    }
-
-    // Fill remaining columns with spacers
-    if (col > 0) {
-        for (int c = col; c < cols; c++)
-            m_voiceGridLayout->addWidget(new QWidget(), row, c);
-    }
+    // Refresh the sidebar to reflect profile changes
+    if (m_folderSidebar)
+        m_folderSidebar->refresh();
 
     // Update tray profiles
+    auto profiles = m_profileManager.listProfiles();
     QStringList names;
     for (auto& p : profiles)
         names << QString::fromStdString(p.name);
@@ -328,6 +235,37 @@ void MainWindow::exportVoice(const std::string& filename) {
     } catch (const std::exception& e) {
         QMessageBox::warning(this, "Export Error", e.what());
     }
+}
+
+void MainWindow::renameVoice(const std::string& filename) {
+    try {
+        auto profile = m_profileManager.loadProfile(filename);
+        if (profile.builtin) {
+            QMessageBox::information(this, "Cannot Rename",
+                "Built-in voices cannot be renamed.");
+            return;
+        }
+
+        bool ok = false;
+        QString newName = QInputDialog::getText(this, "Rename Voice", "New name:",
+            QLineEdit::Normal, QString::fromStdString(profile.name), &ok);
+        if (!ok || newName.trimmed().isEmpty()) return;
+
+        profile.name = newName.trimmed().toStdString();
+        m_profileManager.saveProfile(profile);
+
+        // Refresh sidebar to reflect the rename
+        if (m_folderSidebar)
+            m_folderSidebar->refresh();
+    } catch (const std::exception& e) {
+        QMessageBox::warning(this, "Rename Error", e.what());
+    }
+}
+
+void MainWindow::exportCurrentFolder() {
+    // Placeholder: full implementation in Task 6
+    QMessageBox::information(this, "Export Folder",
+        "Folder export is not yet implemented. Use 'Export' on individual voices for now.");
 }
 
 void MainWindow::importVoice() {
@@ -570,6 +508,21 @@ QWidget* MainWindow::createSettingsTab() {
         "After changing, you may need to re-select the input device in your application."));
     layout->addWidget(nameGroup);
 
+    // Mute mic if disabled
+    auto* safetyGroup = new QGroupBox("Safety", page);
+    auto* safetyLayout = new QVBoxLayout(safetyGroup);
+    m_muteMicIfDisabledCheck = new QCheckBox("Mute mic when disabled", safetyGroup);
+    m_muteMicIfDisabledCheck->setToolTip(
+        "When enabled, your real voice will not be output through the virtual microphone "
+        "when the app is disabled or no effects are applied. This prevents accidental voice leakage.");
+    connect(m_muteMicIfDisabledCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        m_engine.setMuteMicIfDisabled(checked);
+        QSettings settings("vml", "vml");
+        settings.setValue("muteMicIfDisabled", checked);
+    });
+    safetyLayout->addWidget(m_muteMicIfDisabledCheck);
+    layout->addWidget(safetyGroup);
+
     // Theme toggle
     auto* themeGroup = new QGroupBox("Appearance", page);
     auto* themeLayout = new QVBoxLayout(themeGroup);
@@ -630,6 +583,21 @@ void MainWindow::setupToolbar() {
     });
     toolbar->addWidget(m_playbackBtn);
 
+    toolbar->addSeparator();
+
+    // Input/Output waveform visualizers in toolbar
+    m_toolbarInputWaveform = new WaveformWidget();
+    m_toolbarInputWaveform->setLabel("IN");
+    m_toolbarInputWaveform->setFixedHeight(40);
+    m_toolbarInputWaveform->setMinimumWidth(150);
+    toolbar->addWidget(m_toolbarInputWaveform);
+
+    m_toolbarOutputWaveform = new WaveformWidget();
+    m_toolbarOutputWaveform->setLabel("OUT");
+    m_toolbarOutputWaveform->setFixedHeight(40);
+    m_toolbarOutputWaveform->setMinimumWidth(150);
+    toolbar->addWidget(m_toolbarOutputWaveform);
+
     m_recordTimer.setInterval(100);
     connect(&m_recordTimer, &QTimer::timeout, this, &MainWindow::updateRecordingState);
 }
@@ -678,10 +646,14 @@ void MainWindow::updateRecordingState() {
 void MainWindow::connectSignals() {
     connect(m_enableBtn, &QPushButton::toggled, this, [this](bool checked) {
         m_engine.setEnabled(checked);
+        QSettings settings("vml", "vml");
+        settings.setValue("enabled", checked);
     });
 
     connect(m_monitorBtn, &QPushButton::toggled, this, [this](bool checked) {
         m_engine.setMonitorEnabled(checked);
+        QSettings settings("vml", "vml");
+        settings.setValue("monitorEnabled", checked);
     });
 
     connect(m_inputDeviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -701,10 +673,14 @@ void MainWindow::connectSignals() {
     connect(m_tray, &SystemTray::enableToggled, this, [this](bool e) {
         m_engine.setEnabled(e);
         m_enableBtn->setChecked(e);
+        QSettings settings("vml", "vml");
+        settings.setValue("enabled", e);
     });
     connect(m_tray, &SystemTray::monitorToggled, this, [this](bool e) {
         m_engine.setMonitorEnabled(e);
         m_monitorBtn->setChecked(e);
+        QSettings settings("vml", "vml");
+        settings.setValue("monitorEnabled", e);
     });
     connect(m_tray, &SystemTray::showWindowRequested, this, [this]() {
         show(); raise(); activateWindow();
@@ -857,12 +833,20 @@ void MainWindow::onInputDeviceChanged(int index) {
     if (index < 0) return;
     uint32_t nodeId = m_inputDeviceCombo->itemData(index).toUInt();
     m_engine.setInputDevice(nodeId);
+
+    // Save the selection
+    QSettings settings("vml", "vml");
+    settings.setValue("inputDeviceId", nodeId);
 }
 
 void MainWindow::onOutputDeviceChanged(int index) {
     if (index < 0) return;
     uint32_t nodeId = m_outputDeviceCombo->itemData(index).toUInt();
     m_engine.setMonitorOutputDevice(nodeId);
+
+    // Save the selection
+    QSettings settings("vml", "vml");
+    settings.setValue("monitorDeviceId", nodeId);
 }
 
 void MainWindow::onVirtualMicNameChanged() {
@@ -872,6 +856,10 @@ void MainWindow::onVirtualMicNameChanged() {
         m_virtualMicNameEdit->setText(name);
     }
     m_engine.setVirtualMicName(name.toStdString());
+
+    // Save the name
+    QSettings settings("vml", "vml");
+    settings.setValue("virtualMicName", name);
 }
 
 void MainWindow::applyTheme(bool dark) {
@@ -897,6 +885,86 @@ void MainWindow::applyTheme(bool dark) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    saveSettings();
     hide();
     event->ignore();
+}
+
+void MainWindow::loadSettings() {
+    QSettings settings("vml", "vml");
+
+    // Load input device
+    uint32_t inputId = settings.value("inputDeviceId", 0xFFFFFFFF).toUInt();
+    if (inputId != 0xFFFFFFFF) {
+        m_engine.setInputDevice(inputId);
+    }
+
+    // Load output device
+    uint32_t outputId = settings.value("monitorDeviceId", 0xFFFFFFFF).toUInt();
+    if (outputId != 0xFFFFFFFF) {
+        m_engine.setMonitorOutputDevice(outputId);
+    }
+
+    // Load virtual mic name
+    QString micName = settings.value("virtualMicName", "").toString();
+    if (!micName.isEmpty()) {
+        m_engine.setVirtualMicName(micName.toStdString());
+        if (m_virtualMicNameEdit) {
+            m_virtualMicNameEdit->setText(micName);
+        }
+    }
+
+    // Load enabled state
+    bool enabled = settings.value("enabled", true).toBool();
+    m_engine.setEnabled(enabled);
+    if (m_enableBtn) {
+        m_enableBtn->setChecked(enabled);
+    }
+
+    // Load monitor state
+    bool monitor = settings.value("monitorEnabled", false).toBool();
+    m_engine.setMonitorEnabled(monitor);
+    if (m_monitorBtn) {
+        m_monitorBtn->setChecked(monitor);
+    }
+
+    // Load theme
+    bool dark = settings.value("darkTheme", true).toBool();
+    applyTheme(dark);
+
+    // Load mute mic if disabled setting
+    bool muteMicIfDisabled = settings.value("muteMicIfDisabled", false).toBool();
+    m_engine.setMuteMicIfDisabled(muteMicIfDisabled);
+    if (m_muteMicIfDisabledCheck) {
+        m_muteMicIfDisabledCheck->setChecked(muteMicIfDisabled);
+    }
+}
+
+void MainWindow::saveSettings() {
+    QSettings settings("vml", "vml");
+
+    // Save input device
+    settings.setValue("inputDeviceId", m_engine.inputDeviceId());
+
+    // Save output device
+    settings.setValue("monitorDeviceId", m_engine.monitorOutputId());
+
+    // Save virtual mic name
+    if (m_virtualMicNameEdit) {
+        QString name = m_virtualMicNameEdit->text().trimmed();
+        if (!name.isEmpty()) {
+            settings.setValue("virtualMicName", name);
+        }
+    }
+
+    // Save enabled state
+    settings.setValue("enabled", m_engine.enabled());
+
+    // Save monitor state
+    settings.setValue("monitorEnabled", m_engine.monitorEnabled());
+
+    // Theme is saved separately in createSettingsTab
+
+    // Save mute mic if disabled setting
+    settings.setValue("muteMicIfDisabled", m_engine.muteMicIfDisabled());
 }
