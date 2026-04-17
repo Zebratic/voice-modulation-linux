@@ -7,6 +7,19 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+static std::string generateUuid() {
+    static const char chars[] = "0123456789abcdef";
+    std::string result;
+    for (int i = 0; i < 16; ++i) {
+        result += chars[rand() % 16];
+    }
+    return result;
+}
+
+std::string ProfileManager::generateFolderId() {
+    return "f_" + generateUuid();
+}
+
 ProfileManager::ProfileManager() {
     const char* home = std::getenv("HOME");
     m_profileDir = fs::path(home ? home : "/tmp") / ".config" / "vml" / "profiles";
@@ -33,6 +46,202 @@ std::vector<Profile> ProfileManager::listProfiles() const {
     return profiles;
 }
 
+std::vector<Folder> ProfileManager::listFolders() const {
+    fs::path foldersFile = m_profileDir / "folders.json";
+    std::vector<Folder> folders;
+    if (!fs::exists(foldersFile)) return folders;
+
+    try {
+        std::ifstream f(foldersFile);
+        json data = json::parse(f);
+        if (data.is_array()) {
+            for (auto& item : data) {
+                Folder folder;
+                folder.id = item.value("id", "");
+                folder.name = item.value("name", "Untitled");
+                folder.parentId = item.value("parentId", "");
+                folder.order = item.value("order", 0);
+                folders.push_back(folder);
+            }
+        }
+    } catch (...) {}
+    return folders;
+}
+
+void ProfileManager::saveFolder(const Folder& folder) {
+    fs::path foldersFile = m_profileDir / "folders.json";
+    json data;
+    if (fs::exists(foldersFile)) {
+        try {
+            std::ifstream f(foldersFile);
+            data = json::parse(f);
+        } catch (...) {
+            data = json::array();
+        }
+    } else {
+        data = json::array();
+    }
+
+    bool found = false;
+    for (auto& item : data) {
+        if (item.value("id", "") == folder.id) {
+            item["name"] = folder.name;
+            item["parentId"] = folder.parentId;
+            item["order"] = folder.order;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        json item;
+        item["id"] = folder.id;
+        item["name"] = folder.name;
+        item["parentId"] = folder.parentId;
+        item["order"] = folder.order;
+        data.push_back(item);
+    }
+
+    std::ofstream f(foldersFile);
+    f << data.dump(2);
+}
+
+void ProfileManager::deleteFolder(const std::string& folderId) {
+    // Move all profiles in this folder to root
+    auto profiles = listProfiles();
+    for (auto& p : profiles) {
+        if (p.folderId == folderId) {
+            setProfileFolder(p.filename, "");
+        }
+    }
+
+    // Move child folders to root
+    auto folders = listFolders();
+    for (auto& f : folders) {
+        if (f.parentId == folderId) {
+            Folder updated = f;
+            updated.parentId = "";
+            saveFolder(updated);
+        }
+    }
+
+    // Remove the folder from folders.json
+    fs::path foldersFile = m_profileDir / "folders.json";
+    if (fs::exists(foldersFile)) {
+        try {
+            std::ifstream f(foldersFile);
+            json data = json::parse(f);
+            json newData = json::array();
+            for (auto& item : data) {
+                if (item.value("id", "") != folderId) {
+                    newData.push_back(item);
+                }
+            }
+            std::ofstream out(foldersFile);
+            out << newData.dump(2);
+        } catch (...) {}
+    }
+}
+
+void ProfileManager::setProfileFolder(const std::string& filename, const std::string& folderId) {
+    auto profile = loadProfile(filename);
+    profile.data["folderId"] = folderId;
+    saveProfile(profile);
+}
+
+void ProfileManager::moveProfileToFolder(const std::string& filename, const std::string& folderId) {
+    setProfileFolder(filename, folderId);
+}
+
+void ProfileManager::exportFolder(const std::string& folderId, const fs::path& destPath) const {
+    fs::create_directories(destPath);
+
+    // Export the folder manifest
+    auto folders = listFolders();
+    Folder* folder = nullptr;
+    for (auto& f : folders) {
+        if (f.id == folderId) {
+            folder = const_cast<Folder*>(&f);
+            break;
+        }
+    }
+
+    json manifest;
+    manifest["type"] = "vml-folder";
+    manifest["name"] = folder ? folder->name : "Exported Folder";
+    manifest["version"] = 1;
+    manifest["profiles"] = json::array();
+
+    auto profiles = listProfiles();
+    for (auto& p : profiles) {
+        if (p.folderId == folderId) {
+            json pf = p.data;
+            pf.erase("builtin");
+            pf.erase("folderId");
+            manifest["profiles"].push_back(pf);
+        }
+    }
+
+    // Save manifest
+    std::ofstream mf(destPath / "manifest.json");
+    mf << manifest.dump(2);
+
+    // Save each profile
+    for (auto& p : profiles) {
+        if (p.folderId == folderId) {
+            json pf = p.data;
+            pf.erase("builtin");
+            pf.erase("folderId");
+            std::string pname = p.name;
+            std::transform(pname.begin(), pname.end(), pname.begin(), [](unsigned char c) { return std::tolower(c); });
+            std::replace(pname.begin(), pname.end(), ' ', '-');
+            std::ofstream pfFile(destPath / (pname + ".json"));
+            pfFile << pf.dump(2);
+        }
+    }
+}
+
+std::string ProfileManager::importFolder(const fs::path& srcPath, const std::string& parentFolderId) {
+    fs::path manifestPath = srcPath / "manifest.json";
+    if (!fs::exists(manifestPath)) {
+        throw std::runtime_error("No manifest.json found in folder");
+    }
+
+    std::ifstream mf(manifestPath);
+    json manifest = json::parse(mf);
+
+    std::string folderName = manifest.value("name", "Imported Folder");
+    std::string folderId = generateFolderId();
+
+    Folder folder;
+    folder.id = folderId;
+    folder.name = folderName;
+    folder.parentId = parentFolderId;
+    saveFolder(folder);
+
+    if (manifest.contains("profiles")) {
+        for (auto& pf : manifest["profiles"]) {
+            std::string name = pf.value("name", "Imported Voice");
+            pf.erase("builtin");
+            pf["folderId"] = folderId;
+
+            std::string baseFilename = name;
+            std::transform(baseFilename.begin(), baseFilename.end(), baseFilename.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            std::replace(baseFilename.begin(), baseFilename.end(), ' ', '-');
+            std::string filename = baseFilename + ".json";
+            int counter = 1;
+            while (fs::exists(m_profileDir / filename)) {
+                filename = baseFilename + "-" + std::to_string(counter++) + ".json";
+            }
+
+            pf["name"] = name;
+            saveProfile({name, filename, pf, false});
+        }
+    }
+
+    return folderId;
+}
+
 Profile ProfileManager::loadProfile(const std::string& filename) const {
     fs::path path = m_profileDir / filename;
     std::ifstream f(path);
@@ -44,6 +253,7 @@ Profile ProfileManager::loadProfile(const std::string& filename) const {
     p.data = json::parse(f);
     p.name = p.data.value("name", filename);
     p.builtin = p.data.value("builtin", false);
+    p.folderId = p.data.value("folderId", "");
     return p;
 }
 
@@ -335,4 +545,159 @@ void ProfileManager::installDefaultProfiles() const {
         });
         installIfMissing({"Broken Android", "broken-android.json", j, true});
     }
+}
+
+// =============================================================================
+// Voice folder structure — persistence layer
+// =============================================================================
+
+static fs::path folderStructurePath(const fs::path& profileDir) {
+    return profileDir / "folder-structure.json";
+}
+
+void ProfileManager::saveFolderStructure(const FolderStructure& structure) const {
+    fs::path path = folderStructurePath(m_profileDir);
+    std::ofstream f(path);
+    if (!f.is_open())
+        throw std::runtime_error("Cannot save folder structure: " + path.string());
+
+    json j;
+    j["version"] = structure.version;
+    j["folders"] = json::array();
+    for (const auto& folder : structure.folders) {
+        json fj;
+        fj["id"] = folder.id;
+        fj["name"] = folder.name;
+        fj["parentId"] = folder.parentId;
+        fj["expanded"] = folder.expanded;
+        fj["order"] = folder.order;
+        j["folders"].push_back(std::move(fj));
+    }
+    j["voiceAssignments"] = json::object();
+    for (const auto& [filename, folderId] : structure.voiceAssignments) {
+        j["voiceAssignments"][filename] = folderId;
+    }
+    f << j.dump(2);
+}
+
+FolderStructure ProfileManager::loadFolderStructure() const {
+    fs::path path = folderStructurePath(m_profileDir);
+
+    if (!fs::exists(path)) {
+        // First run: create default structure with Built-in folder
+        FolderStructure structure;
+        structure.version = 1;
+
+        VoiceFolder builtin;
+        builtin.id = "builtin";
+        builtin.name = "Built-in";
+        builtin.parentId = "";
+        builtin.expanded = true;
+        builtin.order = 0;
+        structure.folders.push_back(builtin);
+
+        // Assign all existing builtin voices to Built-in folder
+        for (const auto& profile : listProfiles()) {
+            if (profile.builtin) {
+                structure.voiceAssignments[profile.filename] = "builtin";
+            }
+            // User voices stay at root (no entry in voiceAssignments)
+        }
+
+        saveFolderStructure(structure);
+        return structure;
+    }
+
+    std::ifstream f(path);
+    if (!f.is_open())
+        throw std::runtime_error("Cannot open folder structure: " + path.string());
+
+    json j = json::parse(f);
+
+    FolderStructure structure;
+    structure.version = j.value("version", 1);
+
+    if (j.contains("folders") && j["folders"].is_array()) {
+        for (const auto& fj : j["folders"]) {
+            VoiceFolder folder;
+            folder.id = fj.value("id", "");
+            folder.name = fj.value("name", "Untitled");
+            folder.parentId = fj.value("parentId", "");
+            folder.expanded = fj.value("expanded", true);
+            folder.order = fj.value("order", 0);
+            structure.folders.push_back(folder);
+        }
+    }
+
+    if (j.contains("voiceAssignments") && j["voiceAssignments"].is_object()) {
+        for (const auto& [filename, folderId] : j["voiceAssignments"].items()) {
+            structure.voiceAssignments[filename] = folderId.get<std::string>();
+        }
+    }
+
+    return structure;
+}
+
+void ProfileManager::moveVoiceToFolder(const std::string& voiceFilename,
+                                        const std::string& folderId) {
+    if (folderId == "builtin")
+        throw std::runtime_error("Cannot move voices out of the builtin folder");
+
+    FolderStructure structure = loadFolderStructure();
+
+    if (folderId.empty()) {
+        // Move to root: remove assignment
+        structure.voiceAssignments.erase(voiceFilename);
+    } else {
+        structure.voiceAssignments[voiceFilename] = folderId;
+    }
+
+    saveFolderStructure(structure);
+}
+
+std::vector<std::string> ProfileManager::getVoicesInFolder(
+        const std::string& folderId) const {
+    FolderStructure structure = loadFolderStructure();
+    std::vector<std::string> result;
+
+    for (const auto& [filename, fid] : structure.voiceAssignments) {
+        if (fid == folderId) {
+            result.push_back(filename);
+        }
+    }
+
+    // Root-level voices: folderId is empty string in voiceAssignments
+    if (folderId.empty()) {
+        // Already handled by the check above if assigned to ""
+        for (const auto& [filename, fid] : structure.voiceAssignments) {
+            (void)fid; // silence unused warning
+        }
+    }
+
+    return result;
+}
+
+int ProfileManager::getFolderDepth(const std::string& folderId) const {
+    FolderStructure structure = loadFolderStructure();
+
+    if (folderId == "builtin")
+        return 1;
+
+    // Build a map from id -> parentId for quick lookup
+    std::map<std::string, std::string> parentMap;
+    for (const auto& f : structure.folders) {
+        parentMap[f.id] = f.parentId;
+    }
+
+    int depth = 1;
+    std::string current = folderId;
+    while (!current.empty()) {
+        auto it = parentMap.find(current);
+        if (it == parentMap.end())
+            break;
+        ++depth;
+        current = it->second;
+    }
+
+    return depth;
 }
