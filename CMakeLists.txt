@@ -56,6 +56,7 @@ set(VML_SOURCES
     src/gui/SpectrumWidget.cpp
     src/gui/KeyframeTimelineWidget.cpp
     src/gui/ModulatorEditorDialog.cpp
+    src/gui/FolderSidebar.cpp
     src/profile/ProfileManager.cpp
 )
 
