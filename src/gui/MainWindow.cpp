@@ -53,23 +53,20 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
         size_t avail = inRb.availableRead();
         while (avail > 0) {
             size_t n = inRb.read(buf, std::min(avail, size_t(512)));
-            m_inputWaveform->pushSamples(buf, static_cast<int>(n));
+            // Only update toolbar widgets - Edit Voice tab widgets removed to avoid duplication
             m_toolbarInputWaveform->pushSamples(buf, static_cast<int>(n));
             avail -= n;
         }
-        m_inputWaveform->setLevel(m_engine.inputLevel());
         m_toolbarInputWaveform->setLevel(m_engine.inputLevel());
 
         auto& outRb = m_engine.outputWaveform();
         avail = outRb.availableRead();
         while (avail > 0) {
             size_t n = outRb.read(buf, std::min(avail, size_t(512)));
-            m_outputWaveform->pushSamples(buf, static_cast<int>(n));
+            // Only update toolbar widgets
             m_toolbarOutputWaveform->pushSamples(buf, static_cast<int>(n));
-            m_spectrumWidget->pushSamples(buf, static_cast<int>(n));
             avail -= n;
         }
-        m_outputWaveform->setLevel(m_engine.outputLevel());
         m_toolbarOutputWaveform->setLevel(m_engine.outputLevel());
     });
     m_meterTimer.start();
@@ -430,19 +427,8 @@ QWidget* MainWindow::createEditVoiceTab() {
 
     mainLayout->addLayout(topBar);
 
-    // Waveform indicators
-    auto* meterLayout = new QHBoxLayout();
-    m_inputWaveform = new WaveformWidget(page);
-    m_inputWaveform->setLabel("IN");
-    m_outputWaveform = new WaveformWidget(page);
-    m_outputWaveform->setLabel("OUT");
-    meterLayout->addWidget(m_inputWaveform);
-    meterLayout->addWidget(m_outputWaveform);
-    mainLayout->addLayout(meterLayout);
-
-    // Spectrum analyzer
-    m_spectrumWidget = new SpectrumWidget(page);
-    mainLayout->addWidget(m_spectrumWidget);
+    // Note: Waveform and spectrum widgets are displayed in the toolbar
+    // so we don't duplicate them here
 
     // Horizontal split: effect list | pipeline | settings
     auto* splitter = new QSplitter(Qt::Horizontal, page);
