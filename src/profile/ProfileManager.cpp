@@ -3,15 +3,20 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cctype>
+#include <iostream>
+#include <random>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 static std::string generateUuid() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(0, 15);
     static const char chars[] = "0123456789abcdef";
     std::string result;
     for (int i = 0; i < 16; ++i) {
-        result += chars[rand() % 16];
+        result += chars[dis(gen)];
     }
     return result;
 }
@@ -30,11 +35,14 @@ std::vector<Profile> ProfileManager::listProfiles() const {
     std::vector<Profile> profiles;
     if (!fs::exists(m_profileDir)) return profiles;
 
-    for (auto& entry : fs::directory_iterator(m_profileDir)) {
+    for (const auto& entry : fs::directory_iterator(m_profileDir)) {
         if (entry.path().extension() == ".json") {
             try {
                 profiles.push_back(loadProfile(entry.path().filename().string()));
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                std::cerr << "Warning: failed to load profile '" << entry.path().filename().string()
+                          << "': " << e.what() << '\n';
+            }
         }
     }
     // Sort: built-in first, then alphabetical within each group
@@ -64,7 +72,9 @@ std::vector<Folder> ProfileManager::listFolders() const {
                 folders.push_back(folder);
             }
         }
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        std::cerr << "Warning: failed to load folders: " << e.what() << '\n';
+    }
     return folders;
 }
 
@@ -75,7 +85,8 @@ void ProfileManager::saveFolder(const Folder& folder) {
         try {
             std::ifstream f(foldersFile);
             data = json::parse(f);
-        } catch (...) {
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: failed to parse folders.json: " << e.what() << '\n';
             data = json::array();
         }
     } else {
@@ -138,7 +149,9 @@ void ProfileManager::deleteFolder(const std::string& folderId) {
             }
             std::ofstream out(foldersFile);
             out << newData.dump(2);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: failed to write folders.json: " << e.what() << '\n';
+        }
     }
 }
 
@@ -157,22 +170,22 @@ void ProfileManager::exportFolder(const std::string& folderId, const fs::path& d
 
     // Export the folder manifest
     auto folders = listFolders();
-    Folder* folder = nullptr;
-    for (auto& f : folders) {
+    std::string folderName = "Exported Folder";
+    for (const auto& f : folders) {
         if (f.id == folderId) {
-            folder = const_cast<Folder*>(&f);
+            folderName = f.name;
             break;
         }
     }
 
     json manifest;
     manifest["type"] = "vml-folder";
-    manifest["name"] = folder ? folder->name : "Exported Folder";
+    manifest["name"] = folderName;
     manifest["version"] = 1;
     manifest["profiles"] = json::array();
 
     auto profiles = listProfiles();
-    for (auto& p : profiles) {
+    for (const auto& p : profiles) {
         if (p.folderId == folderId) {
             json pf = p.data;
             pf.erase("builtin");
@@ -186,7 +199,7 @@ void ProfileManager::exportFolder(const std::string& folderId, const fs::path& d
     mf << manifest.dump(2);
 
     // Save each profile
-    for (auto& p : profiles) {
+    for (const auto& p : profiles) {
         if (p.folderId == folderId) {
             json pf = p.data;
             pf.erase("builtin");
@@ -663,14 +676,6 @@ std::vector<std::string> ProfileManager::getVoicesInFolder(
     for (const auto& [filename, fid] : structure.voiceAssignments) {
         if (fid == folderId) {
             result.push_back(filename);
-        }
-    }
-
-    // Root-level voices: folderId is empty string in voiceAssignments
-    if (folderId.empty()) {
-        // Already handled by the check above if assigned to ""
-        for (const auto& [filename, fid] : structure.voiceAssignments) {
-            (void)fid; // silence unused warning
         }
     }
 

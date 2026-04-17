@@ -184,7 +184,9 @@ private slots:
         pm.installDefaultProfiles();
         pm.loadFolderStructure();
 
-        // Built-in is depth 1
+        // Built-in is always depth 1: the builtin folder is a synthetic sentinel
+        // (not stored in folder-structure.json) so getFolderDepth short-circuits it
+        // to return 1 directly rather than walking the parent chain.
         QCOMPARE(pm.getFolderDepth("builtin"), 1);
 
         // Add nested folders
@@ -215,14 +217,6 @@ private slots:
         structure.folders.push_back(grandchild);
 
         pm.saveFolderStructure(structure);
-
-        // Built-in is always depth 1
-        auto depths = pm.loadFolderStructure();
-        (void)depths;
-
-        // Reload to get updated structure
-        auto loaded = pm.loadFolderStructure();
-        (void)loaded;
 
         // Verify using getFolderDepth
         // Parent is at root (after builtin), so it should be at least 1
