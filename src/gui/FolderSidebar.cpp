@@ -137,6 +137,8 @@ void FolderSidebar::buildFolderItems(QTreeWidgetItem* parentItem, const std::str
 
                 if (profile.builtin) {
                     voiceItem->setFlags(voiceItem->flags() & ~Qt::ItemIsDragEnabled);
+                } else {
+                    voiceItem->setFlags(voiceItem->flags() | Qt::ItemIsDragEnabled);
                 }
             } catch (const std::exception&) {
                 // Skip voices whose files are missing
@@ -166,6 +168,8 @@ void FolderSidebar::buildFolderItems(QTreeWidgetItem* parentItem, const std::str
 
             if (profile.builtin) {
                 voiceItem->setFlags(voiceItem->flags() & ~Qt::ItemIsDragEnabled);
+            } else {
+                voiceItem->setFlags(voiceItem->flags() | Qt::ItemIsDragEnabled);
             }
         }
     }
@@ -438,4 +442,97 @@ void FolderSidebar::onTreeItemClicked(QTreeWidgetItem* item, int column) {
 
     QString filename = item->data(0, Qt::UserRole).toString();
     emit voiceSelected(filename.toStdString());
+}
+
+void FolderSidebar::dragEnterEvent(QDragEnterEvent* event) {
+    if (!event->mimeData()->hasFormat(QStringLiteral("text/plain")))
+        return;
+
+    QTreeWidgetItem* targetItem = m_tree->itemAt(event->position().toPoint());
+    if (!targetItem)
+        return;
+
+    QString type = targetItem->data(0, Qt::UserRole + 1).toString();
+
+    // Only accept drops on folders or the "All Voices" root item
+    if (type == QStringLiteral("voice"))
+        return;
+
+    if (type == QStringLiteral("folder")) {
+        // Reject builtin folder
+        if (targetItem->data(0, Qt::UserRole + 2).toBool())
+            return;
+
+        // Reject if target folder exceeds max depth
+        QString folderId = targetItem->data(0, Qt::UserRole).toString();
+        int depth = m_profileManager.getFolderDepth(folderId.toStdString());
+        if (depth >= MaxFolderDepth)
+            return;
+    }
+
+    event->acceptProposedAction();
+}
+
+void FolderSidebar::dragMoveEvent(QDragMoveEvent* event) {
+    if (!event->mimeData()->hasFormat(QStringLiteral("text/plain")))
+        return;
+
+    QTreeWidgetItem* targetItem = m_tree->itemAt(event->position().toPoint());
+    if (!targetItem)
+        return;
+
+    QString type = targetItem->data(0, Qt::UserRole + 1).toString();
+
+    if (type == QStringLiteral("voice"))
+        return;
+
+    if (type == QStringLiteral("folder")) {
+        if (targetItem->data(0, Qt::UserRole + 2).toBool())
+            return;
+
+        QString folderId = targetItem->data(0, Qt::UserRole).toString();
+        int depth = m_profileManager.getFolderDepth(folderId.toStdString());
+        if (depth >= MaxFolderDepth)
+            return;
+    }
+
+    event->acceptProposedAction();
+}
+
+void FolderSidebar::dropEvent(QDropEvent* event) {
+    if (!event->mimeData()->hasFormat(QStringLiteral("text/plain")))
+        return;
+
+    QTreeWidgetItem* targetItem = m_tree->itemAt(event->position().toPoint());
+    if (!targetItem)
+        return;
+
+    QString voiceFilename = event->mimeData()->text();
+    if (voiceFilename.isEmpty())
+        return;
+
+    QString targetType = targetItem->data(0, Qt::UserRole + 1).toString();
+
+    std::string targetFolderId;
+
+    if (targetType == QStringLiteral("all_voices")) {
+        // Drop on "All Voices" → move to root (unfiled)
+        targetFolderId = "";
+    } else if (targetType == QStringLiteral("folder")) {
+        // Reject builtin
+        if (targetItem->data(0, Qt::UserRole + 2).toBool())
+            return;
+
+        QString folderId = targetItem->data(0, Qt::UserRole).toString();
+        int depth = m_profileManager.getFolderDepth(folderId.toStdString());
+        if (depth >= MaxFolderDepth)
+            return;
+
+        targetFolderId = folderId.toStdString();
+    } else {
+        return;
+    }
+
+    m_profileManager.moveVoiceToFolder(voiceFilename.toStdString(), targetFolderId);
+    refresh();
 }

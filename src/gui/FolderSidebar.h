@@ -3,6 +3,10 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QPushButton>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <string>
 
 class ProfileManager;
@@ -27,6 +31,11 @@ public slots:
     void onNewSubfolder(QTreeWidgetItem* folderItem);
     void onTreeItemDoubleClicked(QTreeWidgetItem* item, int column);
     void onTreeItemClicked(QTreeWidgetItem* item, int column);
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     void setupUI();
