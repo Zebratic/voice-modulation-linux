@@ -44,6 +44,7 @@ private:
     QTreeWidgetItem* findFolderItem(const std::string& folderId);
     void showFolderContextMenu(QTreeWidgetItem* item, const QPoint& pos);
     void showVoiceContextMenu(QTreeWidgetItem* item, const QPoint& pos);
+    void onDragStarted(const QString& filename);
 
     static constexpr int MaxFolderDepth = 5;
     static const inline QString BuiltinFolderId = QStringLiteral("builtin");

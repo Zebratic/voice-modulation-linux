@@ -9,7 +9,35 @@
 #include <QMenu>
 #include <QHeaderView>
 #include <QVariant>
+#include <QDrag>
 #include <QDebug>
+
+// QTreeWidget subclass that overrides startDrag so we can put the
+// voice filename into text/plain MIME data instead of the default
+// application/x-qabstractitemmodeldatalist format that dropEvent ignores.
+class VoiceTreeWidget : public QTreeWidget {
+public:
+    explicit VoiceTreeWidget(QWidget* parent = nullptr)
+        : QTreeWidget(parent) {}
+
+    void startDrag(Qt::DropActions supportedActions) override {
+        QTreeWidgetItem* item = currentItem();
+        if (!item) return;
+
+        QString type = item->data(0, Qt::UserRole + 1).toString();
+        if (type != QStringLiteral("voice")) {
+            QTreeWidget::startDrag(supportedActions);
+            return;
+        }
+
+        QString filename = item->data(0, Qt::UserRole).toString();
+        auto* drag = new QDrag(this);
+        auto* mimeData = new QMimeData();
+        mimeData->setText(filename);
+        drag->setMimeData(mimeData);
+        drag->exec(supportedActions);
+    }
+};
 
 FolderSidebar::FolderSidebar(ProfileManager& profileManager, QWidget* parent)
     : QWidget(parent)
@@ -26,7 +54,7 @@ void FolderSidebar::setupUI() {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    m_tree = new QTreeWidget(this);
+    m_tree = new VoiceTreeWidget(this);
     m_tree->setHeaderHidden(true);
     m_tree->setIndentation(16);
     m_tree->setSelectionBehavior(QAbstractItemView::SelectRows);
