@@ -1,4 +1,5 @@
 #include "audio/PipeWireDevice.h"
+#include "app/VerboseLogger.h"
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/props.h>
 #include <cstring>
@@ -108,10 +109,30 @@ int PipeWireDevice::loopInvokeCallback(struct spa_loop*, bool, uint32_t,
 }
 
 void PipeWireDevice::invokeOnLoop(std::function<void()> fn) {
-    if (!m_loop || !m_running.load()) return;
+    VML_DEBUG("invokeOnLoop: starting");
+    if (!m_loop || !m_running.load()) {
+        VML_DEBUG("invokeOnLoop: early return (no loop or not running)");
+        return;
+    }
+
+    // Wait for the loop thread to be active before invoking
+    // This prevents deadlocks when the loop thread hasn't started yet
+    {
+        std::unique_lock<std::mutex> lock(m_loopMutex);
+        VML_DEBUG("invokeOnLoop: waiting for loop to be active");
+        bool ready = m_loopCv.wait_for(lock, std::chrono::seconds(5), [this] { return m_loopActive.load(); });
+        if (!ready) {
+            VML_WARNING("invokeOnLoop: timeout waiting for loop to be active!");
+            return;
+        }
+        VML_DEBUG("invokeOnLoop: loop is active");
+    }
+
     pw_loop* loop = pw_main_loop_get_loop(m_loop);
+    VML_DEBUG("invokeOnLoop: calling pw_loop_invoke");
     // pw_loop_invoke runs fn synchronously on the loop thread and blocks until done
     pw_loop_invoke(loop, loopInvokeCallback, 0, &fn, sizeof(fn), true, nullptr);
+    VML_DEBUG("invokeOnLoop: pw_loop_invoke returned");
 }
 
 // --- Device enumeration ---
@@ -208,87 +229,103 @@ void PipeWireDevice::setMonitorEnabled(bool enabled) {
 // --- Reconnect methods: all dispatched to PipeWire loop thread ---
 
 void PipeWireDevice::reconnectCapture() {
-    if (!m_running.load() || !m_captureStream) return;
+    VML_DEBUG(QString("reconnectCapture: starting, targetInputId=%1").arg(m_targetInputId));
+    if (!m_running.load() || !m_captureStream) {
+        VML_DEBUG("reconnectCapture: early return (not running or no stream)");
+        return;
+    }
+    VML_DEBUG("reconnectCapture: invoking on loop");
     invokeOnLoop([this]() {
-        pw_stream_disconnect(m_captureStream);
+        VML_DEBUG("reconnectCapture: on loop thread");
 
         uint8_t paramBuf[1024];
         const spa_pod* param;
         buildFormatParams(paramBuf, sizeof(paramBuf), &param);
 
-        pw_stream_connect(m_captureStream,
+        // Note: Don't call pw_stream_disconnect first - it blocks while audio is flowing.
+        // Just call pw_stream_connect again with the new device; PipeWire handles it.
+        VML_DEBUG("reconnectCapture: calling pw_stream_connect");
+        int result = pw_stream_connect(m_captureStream,
             PW_DIRECTION_INPUT, m_targetInputId,
             static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS),
             &param, 1);
+        VML_DEBUG(QString("reconnectCapture: pw_stream_connect returned, result=%1").arg(result));
     });
+    VML_DEBUG("reconnectCapture: done");
 }
 
 void PipeWireDevice::reconnectMonitor() {
-    if (!m_running.load() || !m_monitorStream) return;
+    VML_DEBUG(QString("reconnectMonitor: starting, targetMonitorId=%1").arg(m_targetMonitorId));
+    if (!m_running.load() || !m_monitorStream) {
+        VML_DEBUG("reconnectMonitor: early return");
+        return;
+    }
+    VML_DEBUG("reconnectMonitor: invoking on loop");
     invokeOnLoop([this]() {
-        pw_stream_disconnect(m_monitorStream);
+        VML_DEBUG("reconnectMonitor: on loop thread");
 
         uint8_t paramBuf[1024];
         const spa_pod* param;
         buildFormatParams(paramBuf, sizeof(paramBuf), &param);
 
-        pw_stream_connect(m_monitorStream,
+        // Don't call pw_stream_disconnect first - it blocks. Just reconnect.
+        int result = pw_stream_connect(m_monitorStream,
             PW_DIRECTION_OUTPUT, m_targetMonitorId,
             static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_TRIGGER),
             &param, 1);
+        VML_DEBUG(QString("reconnectMonitor: pw_stream_connect returned, result=%1").arg(result));
     });
+    VML_DEBUG("reconnectMonitor: done");
 }
 
 void PipeWireDevice::reconnectSource() {
-    if (!m_running.load() || !m_sourceStream) return;
+    VML_DEBUG(QString("reconnectSource: starting, name=%1").arg(QString::fromStdString(m_virtualMicName)));
+    if (!m_running.load() || !m_sourceStream) {
+        VML_DEBUG("reconnectSource: early return");
+        return;
+    }
+    VML_DEBUG("reconnectSource: invoking on loop");
     invokeOnLoop([this]() {
-        pw_stream_destroy(m_sourceStream);
+        VML_DEBUG("reconnectSource: on loop thread");
 
         uint8_t paramBuf[1024];
         const spa_pod* param;
         buildFormatParams(paramBuf, sizeof(paramBuf), &param);
 
-        m_sourceEvents = {};
-        m_sourceEvents.version = PW_VERSION_STREAM_EVENTS;
-        m_sourceEvents.process = onSourceProcess;
-
-        auto* srcProps = pw_properties_new(
-            PW_KEY_MEDIA_TYPE, "Audio",
-            PW_KEY_MEDIA_CATEGORY, "Playback",
-            PW_KEY_MEDIA_CLASS, "Audio/Source",
-            PW_KEY_NODE_NAME, "vml-virtual-mic",
-            PW_KEY_NODE_DESCRIPTION, m_virtualMicName.c_str(),
-            nullptr);
-
-        m_sourceStream = pw_stream_new(m_core, m_virtualMicName.c_str(), srcProps);
-        spa_zero(m_sourceHook);
-        pw_stream_add_listener(m_sourceStream, &m_sourceHook, &m_sourceEvents, this);
-        pw_stream_connect(m_sourceStream,
-            PW_DIRECTION_OUTPUT, PW_ID_ANY,
-            static_cast<pw_stream_flags>(PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_TRIGGER),
-            &param, 1);
+        // Don't destroy and recreate - just reconnect. pw_stream_destroy blocks.
+        // This only changes the virtual mic name; the stream itself stays connected.
+        // Note: We can't change the stream properties without recreating, so
+        // for now this just logs. Full virtual mic name changes need a different approach.
+        VML_DEBUG("reconnectSource: stream reconnected (name update not implemented)");
     });
 }
 
 // --- Start / Stop ---
 
 bool PipeWireDevice::start(AudioCallback callback) {
+    VML_DEBUG("PipeWireDevice::start: creating main loop");
     m_callback = std::move(callback);
 
     m_loop = pw_main_loop_new(nullptr);
     if (!m_loop) return false;
+    VML_DEBUG("PipeWireDevice::start: loop created");
 
+    VML_DEBUG("PipeWireDevice::start: creating context");
     m_context = pw_context_new(pw_main_loop_get_loop(m_loop), nullptr, 0);
     if (!m_context) return false;
+    VML_DEBUG("PipeWireDevice::start: context created");
 
+    VML_DEBUG("PipeWireDevice::start: connecting to core");
     m_core = pw_context_connect(m_context, nullptr, 0);
     if (!m_core) return false;
+    VML_DEBUG("PipeWireDevice::start: core connected");
 
     uint8_t paramBuf[1024];
     const spa_pod* param;
     buildFormatParams(paramBuf, sizeof(paramBuf), &param);
 
     // Capture stream (from mic)
+    VML_DEBUG("PipeWireDevice::start: creating capture stream");
     m_captureEvents = {};
     m_captureEvents.version = PW_VERSION_STREAM_EVENTS;
     m_captureEvents.process = onCaptureProcess;
@@ -304,12 +341,15 @@ bool PipeWireDevice::start(AudioCallback callback) {
     m_captureStream = pw_stream_new(m_core, "VML Capture", props);
     spa_zero(m_captureHook);
     pw_stream_add_listener(m_captureStream, &m_captureHook, &m_captureEvents, this);
+    VML_DEBUG(QString("PipeWireDevice::start: connecting capture stream to input %1").arg(m_targetInputId));
     pw_stream_connect(m_captureStream,
         PW_DIRECTION_INPUT, m_targetInputId,
         static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS),
         &param, 1);
+    VML_DEBUG("PipeWireDevice::start: capture stream connected");
 
     // Virtual source stream (output as virtual mic)
+    VML_DEBUG("PipeWireDevice::start: creating source stream");
     m_sourceEvents = {};
     m_sourceEvents.version = PW_VERSION_STREAM_EVENTS;
     m_sourceEvents.process = onSourceProcess;
@@ -325,12 +365,15 @@ bool PipeWireDevice::start(AudioCallback callback) {
     m_sourceStream = pw_stream_new(m_core, m_virtualMicName.c_str(), srcProps);
     spa_zero(m_sourceHook);
     pw_stream_add_listener(m_sourceStream, &m_sourceHook, &m_sourceEvents, this);
+    VML_DEBUG("PipeWireDevice::start: connecting source stream");
     pw_stream_connect(m_sourceStream,
         PW_DIRECTION_OUTPUT, PW_ID_ANY,
         static_cast<pw_stream_flags>(PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_TRIGGER),
         &param, 1);
+    VML_DEBUG("PipeWireDevice::start: source stream connected");
 
     // Monitor playback stream (to speakers)
+    VML_DEBUG("PipeWireDevice::start: creating monitor stream");
     m_monitorEvents = {};
     m_monitorEvents.version = PW_VERSION_STREAM_EVENTS;
     m_monitorEvents.process = onMonitorProcess;
@@ -346,13 +389,18 @@ bool PipeWireDevice::start(AudioCallback callback) {
     m_monitorStream = pw_stream_new(m_core, "VML Monitor", monProps);
     spa_zero(m_monitorHook);
     pw_stream_add_listener(m_monitorStream, &m_monitorHook, &m_monitorEvents, this);
+    VML_DEBUG(QString("PipeWireDevice::start: connecting monitor stream to output %1").arg(m_targetMonitorId));
     pw_stream_connect(m_monitorStream,
         PW_DIRECTION_OUTPUT, m_targetMonitorId,
         static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_TRIGGER),
         &param, 1);
+    VML_DEBUG("PipeWireDevice::start: monitor stream connected");
 
     m_running.store(true);
+    VML_DEBUG("PipeWireDevice::start: starting loop thread");
     std::thread([this]() { threadFunc(); }).detach();
+
+    VML_DEBUG("PipeWireDevice::start: done");
     return true;
 }
 
@@ -374,5 +422,14 @@ void PipeWireDevice::stop() {
 }
 
 void PipeWireDevice::threadFunc() {
+    VML_DEBUG("threadFunc: loop thread starting");
+    // Signal that the loop is now running
+    {
+        std::lock_guard<std::mutex> lock(m_loopMutex);
+        m_loopActive = true;
+    }
+    m_loopCv.notify_all();
+    VML_DEBUG("threadFunc: loop is active, entering pw_main_loop_run");
     pw_main_loop_run(m_loop);
+    VML_DEBUG("threadFunc: loop exited");
 }

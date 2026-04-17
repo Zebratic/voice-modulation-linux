@@ -15,6 +15,8 @@ public:
     int run();
 
 private:
+    void parseArguments();
+
     std::unique_ptr<AudioEngine> m_engine;
     std::unique_ptr<ProfileManager> m_profileManager;
     std::unique_ptr<MainWindow> m_mainWindow;

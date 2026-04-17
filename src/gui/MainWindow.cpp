@@ -11,6 +11,7 @@
 #include "gui/VoiceDetailsPanel.h"
 #include "effects/EffectRegistry.h"
 #include "audio/ClipRecorder.h"
+#include "app/VerboseLogger.h"
 #include <QToolBar>
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -35,6 +36,7 @@
 
 MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWidget* parent)
     : QMainWindow(parent), m_engine(engine), m_profileManager(profileManager) {
+    VML_DEBUG("MainWindow: constructor started");
     setWindowTitle("VML - Voice Modulation for Linux");
     setMinimumSize(900, 600);
     setupUI();
@@ -71,9 +73,11 @@ MainWindow::MainWindow(AudioEngine& engine, ProfileManager& profileManager, QWid
         m_toolbarOutputWaveform->setLevel(m_engine.outputLevel());
     });
     m_meterTimer.start();
+    VML_DEBUG("MainWindow: constructor done");
 }
 
 void MainWindow::setupUI() {
+    VML_DEBUG("MainWindow::setupUI started");
     m_tabWidget = new QTabWidget(this);
     setCentralWidget(m_tabWidget);
 
@@ -84,6 +88,7 @@ void MainWindow::setupUI() {
 
     // Start on Voices tab
     m_tabWidget->setCurrentIndex(0);
+    VML_DEBUG("MainWindow::setupUI done");
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +96,7 @@ void MainWindow::setupUI() {
 // ---------------------------------------------------------------------------
 
 QWidget* MainWindow::createVoicesTab() {
+    VML_DEBUG("MainWindow::createVoicesTab started");
     auto* page = new QWidget();
     auto* layout = new QHBoxLayout(page);
     layout->setContentsMargins(4, 4, 4, 4);
@@ -182,10 +188,15 @@ void MainWindow::rebuildVoiceGrid() {
 }
 
 void MainWindow::activateVoice(const std::string& filename) {
+    VML_DEBUG(QString("activateVoice: starting for %1").arg(QString::fromStdString(filename)));
     m_activeVoiceFilename = filename;
+    VML_DEBUG("activateVoice: calling applyProfile");
     applyProfile(filename);
+    VML_DEBUG("activateVoice: applyProfile done, updating UI");
     m_voiceDetailsPanel->setActiveVoiceFilename(filename);
+    VML_DEBUG("activateVoice: calling rebuildVoiceGrid");
     rebuildVoiceGrid();
+    VML_DEBUG("activateVoice: done");
 }
 
 void MainWindow::editVoice(const std::string& filename) {
@@ -766,13 +777,20 @@ std::atomic<float>* MainWindow::resolveParam(const std::string& effectId, const 
 }
 
 void MainWindow::applyProfile(const std::string& filename) {
+    VML_DEBUG(QString("applyProfile: starting for %1").arg(QString::fromStdString(filename)));
     try {
+        VML_DEBUG("applyProfile: loading profile from manager");
         auto profile = m_profileManager.loadProfile(filename);
+        VML_DEBUG("applyProfile: profile loaded");
         auto effects = ProfileManager::jsonToPipeline(profile.data);
 
+        VML_DEBUG("applyProfile: clearing engine");
         m_engine.modulationManager().clear();
         m_engine.pipeline().clear();
+
+        VML_DEBUG(QString("applyProfile: adding %1 effects").arg(effects.size()));
         for (auto& [effectId, params] : effects) {
+            VML_DEBUG(QString("applyProfile: creating effect: %1").arg(QString::fromStdString(effectId)));
             auto effect = EffectRegistry::instance().create(effectId);
             if (!effect) continue;
             for (auto& [pid, val] : params) {
@@ -785,16 +803,20 @@ void MainWindow::applyProfile(const std::string& filename) {
         }
 
         if (profile.data.contains("modulators") && profile.data["modulators"].is_array()) {
+            VML_DEBUG("applyProfile: loading modulators");
             m_engine.modulationManager().fromJson(profile.data["modulators"],
                 [this](const std::string& eid, const std::string& pid) {
                     return resolveParam(eid, pid);
                 });
         }
 
+        VML_DEBUG("applyProfile: rebuilding UI widgets");
         m_pipelineWidget->rebuild();
         m_settingsPanel->clearEffect();
         m_keyframeTimeline->rebuild();
+        VML_DEBUG("applyProfile: done");
     } catch (const std::exception& e) {
+        VML_DEBUG(QString("applyProfile: exception: %1").arg(e.what()));
         QMessageBox::warning(this, "Error", QString("Failed to load profile: %1").arg(e.what()));
     }
 }
@@ -878,9 +900,12 @@ void MainWindow::refreshOutputDevices() {
 }
 
 void MainWindow::onInputDeviceChanged(int index) {
+    VML_DEBUG(QString("onInputDeviceChanged: index = %1").arg(index));
     if (index < 0) return;
     uint32_t nodeId = m_inputDeviceCombo->itemData(index).toUInt();
+    VML_DEBUG(QString("onInputDeviceChanged: calling setInputDevice %1").arg(nodeId));
     m_engine.setInputDevice(nodeId);
+    VML_DEBUG("onInputDeviceChanged: done");
 
     // Save the selection
     QSettings settings("vml", "vml");
@@ -888,9 +913,12 @@ void MainWindow::onInputDeviceChanged(int index) {
 }
 
 void MainWindow::onOutputDeviceChanged(int index) {
+    VML_DEBUG(QString("onOutputDeviceChanged: index = %1").arg(index));
     if (index < 0) return;
     uint32_t nodeId = m_outputDeviceCombo->itemData(index).toUInt();
+    VML_DEBUG(QString("onOutputDeviceChanged: calling setMonitorOutputDevice %1").arg(nodeId));
     m_engine.setMonitorOutputDevice(nodeId);
+    VML_DEBUG("onOutputDeviceChanged: done");
 
     // Save the selection
     QSettings settings("vml", "vml");

@@ -27,6 +27,7 @@ FetchContent_MakeAvailable(json)
 set(VML_SOURCES
     src/main.cpp
     src/app/Application.cpp
+    src/app/VerboseLogger.cpp
     src/audio/AudioEngine.cpp
     src/audio/PipeWireDevice.cpp
     src/audio/EffectPipeline.cpp

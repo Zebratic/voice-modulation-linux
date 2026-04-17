@@ -19,6 +19,15 @@ void EffectPipeline::process(float* data, int numFrames) {
     if (m_modulationMgr)
         m_modulationMgr->tick(m_sampleRate, numFrames);
 
+    // Mute if no effects are active and the setting is enabled
+    if (!hasActiveEffects() && m_muteMicIfDisabled.load(std::memory_order_relaxed)) {
+        // Silence the output
+        for (int i = 0; i < numFrames; ++i)
+            data[i] = 0.f;
+        m_peakLevel.store(0.f, std::memory_order_relaxed);
+        return;
+    }
+
     for (auto& e : m_chain) {
         if (e->enabled())
             e->process(data, numFrames);
@@ -68,4 +77,14 @@ EffectBase* EffectPipeline::effectAt(int index) const {
     if (index >= 0 && index < static_cast<int>(m_chain.size()))
         return m_chain[index].get();
     return nullptr;
+}
+
+bool EffectPipeline::hasActiveEffects() const {
+    // Note: This is called from process() which already holds m_mutex.
+    // Do NOT acquire the lock here to avoid recursive lock deadlock.
+    for (const auto& e : m_chain) {
+        if (e->enabled())
+            return true;
+    }
+    return false;
 }

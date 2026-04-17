@@ -29,6 +29,13 @@ public:
 
     void setModulationManager(ModulationManager* mgr) { m_modulationMgr = mgr; }
 
+    // Mute mic if no effects applied (prevents accidental voice leakage)
+    void setMuteMicIfDisabled(bool mute) { m_muteMicIfDisabled.store(mute, std::memory_order_relaxed); }
+    bool muteMicIfDisabled() const { return m_muteMicIfDisabled.load(std::memory_order_relaxed); }
+
+    // Check if any effects are actively enabled (RT-safe, uses atomic enabled() check)
+    bool hasActiveEffects() const;
+
 private:
     // Double-buffer: GUI builds new chain, then swaps pointer atomically
     using Chain = std::vector<std::unique_ptr<EffectBase>>;
@@ -38,4 +45,5 @@ private:
     int m_blockSize = 256;
     std::atomic<float> m_peakLevel{0.f};
     ModulationManager* m_modulationMgr = nullptr;
+    std::atomic<bool> m_muteMicIfDisabled{false};
 };

@@ -76,6 +76,10 @@ void AudioEngine::audioCallback(float* input, float* output, int numFrames) {
 
     if (m_enabled.load(std::memory_order_relaxed)) {
         m_pipeline.process(output, numFrames);
+    } else if (m_pipeline.muteMicIfDisabled() && !m_pipeline.hasActiveEffects()) {
+        // Mute the output when disabled and no active effects, if setting is enabled
+        for (int i = 0; i < numFrames; ++i)
+            output[i] = 0.f;
     }
 
     // Push output samples for waveform display

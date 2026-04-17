@@ -1,5 +1,6 @@
 #include "effects/EffectRegistry.h"
 #include "effects/EffectBase.h"
+#include "effects/NoiseSuppressionEffect.h"
 
 EffectRegistry& EffectRegistry::instance() {
     static EffectRegistry reg;

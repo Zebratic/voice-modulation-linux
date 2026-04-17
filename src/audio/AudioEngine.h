@@ -26,6 +26,10 @@ public:
     void setMonitorEnabled(bool enabled);
     bool monitorEnabled() const;
 
+    // Mute mic if no effects applied (prevents accidental voice leakage)
+    void setMuteMicIfDisabled(bool mute) { m_pipeline.setMuteMicIfDisabled(mute); }
+    bool muteMicIfDisabled() const { return m_pipeline.muteMicIfDisabled(); }
+
     void setPlaybackActive(bool active) { m_device.setPlaybackActive(active); }
     bool playbackActive() const { return m_device.playbackActive(); }
 

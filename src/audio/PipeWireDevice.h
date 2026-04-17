@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 
 struct AudioDevice {
     uint32_t id;
@@ -71,13 +73,19 @@ private:
 
     AudioCallback m_callback;
     std::atomic<bool> m_running{false};
+    std::atomic<bool> m_loopActive{false};  // True when loop thread is running
     std::atomic<bool> m_monitorEnabled{false};
     std::atomic<bool> m_playbackActive{false};
     uint32_t m_targetInputId = PW_ID_ANY;
     uint32_t m_targetMonitorId = PW_ID_ANY;
     std::string m_virtualMicName = "VML Virtual Microphone";
 
+    std::mutex m_loopMutex;
+    std::condition_variable m_loopCv;
+
     static constexpr int MAX_BLOCK = 1024;
+    // Single buffer shared between source and monitor - safe because PipeWire
+    // processes callbacks sequentially (capture -> source -> monitor) in trigger mode
     float m_processBuffer[MAX_BLOCK] = {};
     int m_processedFrames = 0;
 
