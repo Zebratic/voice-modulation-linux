@@ -48,7 +48,7 @@ void VoiceDetailsPanel::setupUI() {
             QLineEdit::Normal, m_nameLabel->text(), &ok);
         if (!ok || newName.trimmed().isEmpty()) return;
         QString safe = newName.trimmed();
-        emit renameRequested(m_currentFilename);
+        emit renameRequested(safe.toStdString());
         // Update display to the new name
         m_nameLabel->setText(safe);
     });
@@ -187,12 +187,6 @@ void VoiceDetailsPanel::populateEffects(const nlohmann::json& profileData) {
     int effectCount = 0;
     if (profileData.contains("effects") && profileData["effects"].is_array())
         effectCount = static_cast<int>(profileData["effects"].size());
-
-    // Header line showing total count
-    auto* countLabel = new QLabel(QString("(%1)").arg(effectCount), this);
-    countLabel->setStyleSheet("QLabel { color: #888; font-size: 11px; }");
-    // Replace "Effects" header text — update it inline
-    // (We embed the count directly in the effect list header below)
 
     if (effectCount == 0) {
         auto* emptyLbl = new QLabel("No effects", this);
